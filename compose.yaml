@@ -1,0 +1,99 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  mailpit:
+    image: axllent/mailpit:v1.23
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  backend:
+    build: ./apps/backend
+    env_file: .env
+    command: uv run python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./apps/backend:/app
+      - backend_venv:/app/.venv
+      - backend_static:/app/staticfiles
+      - backend_media:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  celery-worker:
+    build: ./apps/backend
+    env_file: .env
+    command: uv run celery -A config worker -l INFO
+    volumes:
+      - ./apps/backend:/app
+      - backend_venv:/app/.venv
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build: ./apps/backend
+    env_file: .env
+    command: uv run celery -A config beat -l INFO
+    volumes:
+      - ./apps/backend:/app
+      - backend_venv:/app/.venv
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  admin-web:
+    build:
+      context: .
+      dockerfile: apps/admin-web/Dockerfile
+    env_file: .env
+    command: pnpm dev --hostname 0.0.0.0
+    volumes:
+      - ./apps/admin-web:/workspace/apps/admin-web
+      - admin_web_node_modules:/workspace/apps/admin-web/node_modules
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_static:
+  backend_media:
+  backend_venv:
+  admin_web_node_modules:

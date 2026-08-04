@@ -1,0 +1,7 @@
+packages:
+  - apps/admin-web
+  - packages/*
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
