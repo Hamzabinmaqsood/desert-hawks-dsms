@@ -16,4 +16,13 @@ playwright-report/
 test-results/
 staticfiles/
 media/
+private-media/
 *.log
+# Celery runtime state
+apps/backend/celerybeat-schedule
+apps/backend/celerybeat-schedule-shm
+apps/backend/celerybeat-schedule-wal
+
+# Generated validation artifacts
+apps/backend/coverage-*.json
+apps/backend/openapi-*.yaml

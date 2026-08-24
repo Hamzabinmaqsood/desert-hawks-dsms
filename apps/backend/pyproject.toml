@@ -4,17 +4,31 @@ version = "0.1.0"
 description = "Desert Hawks DSMS backend"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-  "celery>=5.4,<6", "Django>=5.2,<5.3", "django-cors-headers>=4.6,<5",
-  "django-environ>=0.12,<1", "djangorestframework>=3.15,<4",
-  "djangorestframework-simplejwt>=5.4,<6", "drf-spectacular>=0.28,<1",
-  "gunicorn>=23,<24", "psycopg[binary]>=3.2,<4", "redis>=5.2,<6",
+  "celery>=5.4,<6",
+  "cryptography>=50.0.0",
+  "Django>=5.2,<5.3",
+  "django-cors-headers>=4.6,<5",
+  "django-environ>=0.12,<1",
+  "django-filter>=26.1",
+  "djangorestframework>=3.15,<4",
+  "djangorestframework-simplejwt>=5.4,<6",
+  "drf-spectacular>=0.28,<1",
+  "gunicorn>=23,<24",
+  "psycopg[binary]>=3.2,<4",
+  "redis>=5.2,<6",
 ]
 
 [dependency-groups]
 dev = [
-  "django-stubs[compatible-mypy]>=5.1,<6", "djangorestframework-stubs>=3.15,<4",
-  "factory-boy>=3.3,<4", "mypy>=1.14,<2", "pytest>=8.3,<9",
-  "pytest-cov>=6,<7", "pytest-django>=4.9,<5", "ruff>=0.9,<1",
+  "django-stubs[compatible-mypy]>=5.1,<6",
+  "djangorestframework-stubs>=3.15,<4",
+  "factory-boy>=3.3,<4",
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+  "pytest-django>=4.9,<5",
+  "ruff>=0.9,<1",
+  "types-factory-boy>=0.4.1",
 ]
 
 [tool.ruff]
@@ -49,4 +63,8 @@ django_settings_module = "config.settings.test"
 
 [[tool.mypy.overrides]]
 module = ["environ"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["django_filters", "django_filters.*"]
 ignore_missing_imports = true

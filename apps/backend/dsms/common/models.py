@@ -16,3 +16,10 @@ class TimeStampedModel(models.Model):
 
     class Meta:
         abstract = True
+
+
+class ActiveModel(models.Model):
+    is_active = models.BooleanField(default=True, verbose_name="Active")
+
+    class Meta:
+        abstract = True
