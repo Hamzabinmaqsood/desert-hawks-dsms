@@ -1,13 +1,15 @@
 # mypy: disable-error-code="type-arg,attr-defined,no-untyped-def,no-untyped-call,arg-type"
+from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, viewsets
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from dsms.identity.access import filter_queryset_by_scope
-from dsms.identity.permissions import HasRBACPermission
+from dsms.identity.access import filter_queryset_by_scope, get_accessible_branch_ids
+from dsms.identity.permissions import HasRBACPermission, RequiresPermission
 from dsms.workforce.models import Employee
 
 from .. import models, services
@@ -152,59 +154,70 @@ RosterChangeViewSet = basic(models.RosterChangeEvent)
 AvailabilityConflictViewSet = basic(models.RosterAvailabilityConflict)
 
 
-@extend_schema(responses=OpenApiTypes.OBJECT)
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def eligibility(request, employee_id):
-    from dsms.contracts.models import SecurityPost, SecuritySite
+class DeploymentEligibilityView(APIView):
+    permission_classes = [IsAuthenticated, RequiresPermission]
+    required_permission = "deployment.view_dutyshift"
 
-    employee = Employee.objects.get(pk=employee_id)
-    site = SecuritySite.objects.select_related("client", "contract").get(
-        pk=request.query_params["site"]
-    )
-    post = (
-        SecurityPost.objects.get(pk=request.query_params["post"])
-        if request.query_params.get("post")
-        else None
-    )
-    result = services.evaluate_deployment_eligibility(employee=employee, site=site, post=post)
-    return Response(
-        {
-            "employee_id": str(employee.pk),
-            "status": result.status,
-            "blocking_reasons": result.blocking_reasons,
-            "warnings": result.warnings,
-        }
-    )
+    @extend_schema(responses=OpenApiTypes.OBJECT)
+    def get(self, request, employee_id):
+        from dsms.contracts.models import SecurityPost, SecuritySite
+
+        branch_ids = get_accessible_branch_ids(request.user, permission=self.required_permission)
+        employee = get_object_or_404(
+            Employee.objects.select_related("branch"), pk=employee_id, branch_id__in=branch_ids
+        )
+        site = get_object_or_404(
+            SecuritySite.objects.select_related("client", "contract", "managing_branch"),
+            pk=request.query_params.get("site"),
+            managing_branch_id__in=branch_ids,
+        )
+        post = None
+        if request.query_params.get("post"):
+            post = get_object_or_404(
+                SecurityPost.objects.select_related("site"),
+                pk=request.query_params["post"],
+                site=site,
+                site__managing_branch_id__in=branch_ids,
+            )
+        result = services.evaluate_deployment_eligibility(employee=employee, site=site, post=post)
+        return Response(
+            {
+                "employee_id": str(employee.pk),
+                "status": result.status,
+                "blocking_reasons": result.blocking_reasons,
+                "warnings": result.warnings,
+            }
+        )
 
 
-@extend_schema(responses=OpenApiTypes.OBJECT)
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def dashboard_summary(request):
-    from django.db.models import Sum
-    from django.utils import timezone
+class DeploymentDashboardView(APIView):
+    permission_classes = [IsAuthenticated, RequiresPermission]
+    required_permission = "deployment.view_dutyshift"
 
-    today = timezone.localdate()
-    from dsms.identity.access import get_accessible_branch_ids
+    @extend_schema(responses=OpenApiTypes.OBJECT)
+    def get(self, request):
+        from django.db.models import Sum
+        from django.utils import timezone
 
-    shifts = models.DutyShift.objects.filter(
-        duty_date=today, branch_id__in=get_accessible_branch_ids(request.user)
-    ).exclude(status="CANCELLED")
-    required = shifts.aggregate(v=Sum("required_headcount"))["v"] or 0
-    assigned = models.DutyAssignment.objects.filter(
-        duty_shift__in=shifts, status__in=["PLANNED", "CONFIRMED"]
-    ).count()
-    return Response(
-        {
-            "active_deployments": models.EmployeeDeployment.objects.filter(
-                status="ACTIVE", managing_branch_id__in=get_accessible_branch_ids(request.user)
-            ).count(),
-            "today_planned_duty_shifts": shifts.count(),
-            "today_required_positions": required,
-            "today_assigned_positions": assigned,
-            "unfilled_positions": max(required - assigned, 0),
-            "planned_coverage_percentage": str(assigned * 100 / required if required else 0),
-            "attendance_records_created": 0,
-        }
-    )
+        today = timezone.localdate()
+        branch_ids = get_accessible_branch_ids(request.user, permission=self.required_permission)
+        shifts = models.DutyShift.objects.filter(duty_date=today, branch_id__in=branch_ids).exclude(
+            status="CANCELLED"
+        )
+        required = shifts.aggregate(v=Sum("required_headcount"))["v"] or 0
+        assigned = models.DutyAssignment.objects.filter(
+            duty_shift__in=shifts, status__in=["PLANNED", "CONFIRMED"]
+        ).count()
+        return Response(
+            {
+                "active_deployments": models.EmployeeDeployment.objects.filter(
+                    status="ACTIVE", managing_branch_id__in=branch_ids
+                ).count(),
+                "today_planned_duty_shifts": shifts.count(),
+                "today_required_positions": required,
+                "today_assigned_positions": assigned,
+                "unfilled_positions": max(required - assigned, 0),
+                "planned_coverage_percentage": str(assigned * 100 / required if required else 0),
+                "attendance_records_created": 0,
+            }
+        )

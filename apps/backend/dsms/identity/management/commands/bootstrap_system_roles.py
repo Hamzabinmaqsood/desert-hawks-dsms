@@ -824,7 +824,11 @@ _SYSTEM_ROLES: list[dict[str, Any]] = [
                 "supervisordailyreport",
             ],
             ("view", "add", "change"),
-        ),
+        )
+        + [
+            ("supervision", "view_guard_observation"),
+            ("supervision", "view_sensitive_field_evidence"),
+        ],
     },
     {
         "code": "FIELD_SUPERVISOR",
@@ -887,6 +891,8 @@ _SYSTEM_ROLES: list[dict[str, Any]] = [
         "permissions": [
             ("supervision", "view_supervision_reports"),
             ("supervision", "view_supervision_audit"),
+            ("supervision", "view_guard_observation"),
+            ("supervision", "view_sensitive_field_evidence"),
             ("supervision", "download_field_evidence"),
         ],
     },

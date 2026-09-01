@@ -24,6 +24,10 @@ for prefix, viewset in (
 
 urlpatterns = [
     path("", include(router.urls)),
-    path("dashboard/summary/", views.dashboard_summary, name="supervision-dashboard-summary"),
-    path("exceptions/", views.exceptions),
+    path(
+        "dashboard/summary/",
+        views.SupervisionSummaryView.as_view(),
+        name="supervision-dashboard-summary",
+    ),
+    path("exceptions/", views.SupervisionExceptionsView.as_view()),
 ]

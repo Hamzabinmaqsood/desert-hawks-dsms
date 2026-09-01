@@ -24,8 +24,12 @@ urlpatterns = [
     path("", include(router.urls)),
     path(
         "eligibility/employees/<uuid:employee_id>/",
-        views.eligibility,
+        views.DeploymentEligibilityView.as_view(),
         name="deployment-eligibility",
     ),
-    path("dashboard/summary/", views.dashboard_summary, name="deployment-dashboard-summary"),
+    path(
+        "dashboard/summary/",
+        views.DeploymentDashboardView.as_view(),
+        name="deployment-dashboard-summary",
+    ),
 ]

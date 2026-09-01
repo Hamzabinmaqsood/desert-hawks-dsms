@@ -1,14 +1,16 @@
 # mypy: disable-error-code="attr-defined,no-untyped-def,type-arg,no-untyped-call,arg-type"
+from django.db.models import Q
 from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from dsms.identity.access import filter_queryset_by_scope
-from dsms.identity.permissions import HasRBACPermission
+from dsms.identity.access import filter_queryset_by_scope, get_accessible_branch_ids
+from dsms.identity.permissions import HasRBACPermission, RequiresPermission
 
 from .. import models, services
 from .serializers import SERIALIZERS
@@ -145,76 +147,113 @@ class CorrectiveActionViewSet(NoDeleteViewSet):
 class GuardObservationViewSet(
     mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
 ):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasRBACPermission]
+    custom_action_permissions = {
+        "list": "supervision.view_guard_observation",
+        "retrieve": "supervision.view_guard_observation",
+    }
     queryset = models.GuardObservation.objects.select_related("site_visit", "employee", "post")
     serializer_class = SERIALIZERS["GuardObservation"]
 
+    def get_queryset(self):
+        branches = get_accessible_branch_ids(
+            self.request.user, permission="supervision.view_guard_observation"
+        )
+        return self.queryset.filter(site__managing_branch_id__in=branches).order_by("id")
+
 
 class EvidenceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    permission_classes = [IsAuthenticated]
-    queryset = models.FieldEvidence.objects.all()
+    permission_classes = [IsAuthenticated, HasRBACPermission]
+    custom_action_permissions = {
+        "list": "supervision.view_sensitive_field_evidence",
+        "retrieve": "supervision.view_sensitive_field_evidence",
+    }
+    queryset = models.FieldEvidence.objects.select_related(
+        "site_visit__branch",
+        "inspection__site__managing_branch",
+        "finding__site__managing_branch",
+        "corrective_action__site__managing_branch",
+    )
     serializer_class = SERIALIZERS["FieldEvidence"]
 
+    def get_queryset(self):
+        branches = get_accessible_branch_ids(
+            self.request.user, permission="supervision.view_sensitive_field_evidence"
+        )
+        return (
+            self.queryset.filter(
+                Q(site_visit__branch_id__in=branches)
+                | Q(inspection__site__managing_branch_id__in=branches)
+                | Q(finding__site__managing_branch_id__in=branches)
+                | Q(corrective_action__site__managing_branch_id__in=branches)
+            )
+            .distinct()
+            .order_by("id")
+        )
 
-@extend_schema(responses=OpenApiTypes.OBJECT)
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def dashboard_summary(request):
-    from dsms.identity.access import get_accessible_branch_ids
 
+def _supervision_summary(*, branches, exceptions_only=False):
     today = timezone.localdate()
-    branches = get_accessible_branch_ids(request.user)
     plans = models.SupervisorVisitPlan.objects.filter(planned_date=today, branch_id__in=branches)
     actions = models.CorrectiveAction.objects.exclude(
         status__in=["VERIFIED", "CLOSED", "CANCELLED"]
     ).filter(site__managing_branch_id__in=branches)
-    return Response(
-        {
-            "today_planned_visits": plans.count(),
-            "today_completed_visits": plans.filter(status="COMPLETED").count(),
-            "visits_in_progress": models.SiteVisit.objects.filter(
-                status="IN_PROGRESS", branch_id__in=branches
+    if exceptions_only:
+        return {
+            "missed_visits": models.SupervisorVisitPlan.objects.filter(
+                status="MISSED", branch_id__in=branches
             ).count(),
-            "missed_visits": plans.filter(status="MISSED").count(),
-            "inspections_completed": models.SiteInspection.objects.filter(
-                submitted_at__date=today, site__managing_branch_id__in=branches
-            ).count(),
-            "open_findings": models.InspectionFinding.objects.filter(
-                status__in=["OPEN", "ACKNOWLEDGED", "ACTION_ASSIGNED"],
-                site__managing_branch_id__in=branches,
+            "outside_geofence": models.SiteVisit.objects.filter(
+                verification_result__in=["WARNING", "FAILED"], branch_id__in=branches
             ).count(),
             "critical_findings": models.InspectionFinding.objects.filter(
                 severity="CRITICAL", site__managing_branch_id__in=branches
             )
             .exclude(status__in=["CLOSED", "DISMISSED"])
             .count(),
-            "open_corrective_actions": actions.count(),
             "overdue_corrective_actions": actions.filter(due_at__lt=timezone.now()).count(),
-            "guard_discrepancies": models.GuardObservation.objects.filter(
-                observed_at__date=today, site__managing_branch_id__in=branches
-            )
-            .exclude(observation_status="PRESENT_AS_SCHEDULED")
-            .count(),
         }
-    )
+    return {
+        "today_planned_visits": plans.count(),
+        "today_completed_visits": plans.filter(status="COMPLETED").count(),
+        "visits_in_progress": models.SiteVisit.objects.filter(
+            status="IN_PROGRESS", branch_id__in=branches
+        ).count(),
+        "missed_visits": plans.filter(status="MISSED").count(),
+        "inspections_completed": models.SiteInspection.objects.filter(
+            submitted_at__date=today, site__managing_branch_id__in=branches
+        ).count(),
+        "open_findings": models.InspectionFinding.objects.filter(
+            status__in=["OPEN", "ACKNOWLEDGED", "ACTION_ASSIGNED"],
+            site__managing_branch_id__in=branches,
+        ).count(),
+        "critical_findings": models.InspectionFinding.objects.filter(
+            severity="CRITICAL", site__managing_branch_id__in=branches
+        )
+        .exclude(status__in=["CLOSED", "DISMISSED"])
+        .count(),
+        "open_corrective_actions": actions.count(),
+        "overdue_corrective_actions": actions.filter(due_at__lt=timezone.now()).count(),
+        "guard_discrepancies": models.GuardObservation.objects.filter(
+            observed_at__date=today, site__managing_branch_id__in=branches
+        )
+        .exclude(observation_status="PRESENT_AS_SCHEDULED")
+        .count(),
+    }
 
 
-@extend_schema(responses=OpenApiTypes.OBJECT)
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def exceptions(request):
-    now = timezone.now()
-    return Response(
-        {
-            "missed_visits": models.SupervisorVisitPlan.objects.filter(status="MISSED").count(),
-            "outside_geofence": models.SiteVisit.objects.filter(
-                verification_result__in=["WARNING", "FAILED"]
-            ).count(),
-            "critical_findings": models.InspectionFinding.objects.filter(severity="CRITICAL")
-            .exclude(status__in=["CLOSED", "DISMISSED"])
-            .count(),
-            "overdue_corrective_actions": models.CorrectiveAction.objects.filter(due_at__lt=now)
-            .exclude(status__in=["VERIFIED", "CLOSED", "CANCELLED"])
-            .count(),
-        }
-    )
+class SupervisionSummaryView(APIView):
+    permission_classes = [IsAuthenticated, RequiresPermission]
+    required_permission = "supervision.view_supervision_dashboard"
+    exceptions_only = False
+
+    @extend_schema(responses=OpenApiTypes.OBJECT)
+    def get(self, request):
+        branches = get_accessible_branch_ids(request.user, permission=self.required_permission)
+        return Response(
+            _supervision_summary(branches=branches, exceptions_only=self.exceptions_only)
+        )
+
+
+class SupervisionExceptionsView(SupervisionSummaryView):
+    exceptions_only = True

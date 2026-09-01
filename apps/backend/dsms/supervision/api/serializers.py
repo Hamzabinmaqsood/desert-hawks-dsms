@@ -41,6 +41,33 @@ def serializer_for(model_class):
 SERIALIZERS = {name: serializer_for(getattr(models, name)) for name in MODEL_NAMES}
 
 
+class FieldEvidenceSerializer(serializers.ModelSerializer):
+    """Metadata-only representation; private storage paths are never serialized."""
+
+    class Meta:
+        model = models.FieldEvidence
+        exclude = ("file",)
+        read_only_fields = (
+            "id",
+            "company",
+            "site_visit",
+            "inspection",
+            "finding",
+            "corrective_action",
+            "original_filename",
+            "file_size",
+            "mime_type",
+            "sha256_hash",
+            "caption",
+            "captured_at",
+            "uploaded_by",
+            "created_at",
+        )
+
+
+SERIALIZERS["FieldEvidence"] = FieldEvidenceSerializer
+
+
 class SiteVisitSerializer(SERIALIZERS["SiteVisit"]):
     def to_representation(self, instance):
         data = super().to_representation(instance)

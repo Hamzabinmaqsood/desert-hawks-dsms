@@ -77,6 +77,12 @@ def test_bootstrap_creates_expected_system_roles() -> None:
     access_admin_role = Role.objects.get(code="ACCESS_ADMIN")
     assert access_admin_role.permissions.filter(codename="manage_roles").exists()
     assert access_admin_role.permissions.filter(codename="assign_roles").exists()
+    supervision_admin = Role.objects.get(code="SUPERVISION_ADMIN")
+    assert supervision_admin.permissions.filter(codename="view_guard_observation").exists()
+    assert supervision_admin.permissions.filter(codename="view_sensitive_field_evidence").exists()
+    supervision_auditor = Role.objects.get(code="SUPERVISION_AUDITOR")
+    assert supervision_auditor.permissions.filter(codename="view_guard_observation").exists()
+    assert supervision_auditor.permissions.filter(codename="view_sensitive_field_evidence").exists()
 
 
 def test_bootstrap_is_idempotent() -> None:
