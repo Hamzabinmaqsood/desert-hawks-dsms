@@ -52,6 +52,13 @@ from tests.factories.workforce import EmployeeFactory
 pytestmark = pytest.mark.django_db
 
 
+@pytest.fixture(autouse=True)
+def fixed_payment_business_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "dsms.finance.payment_services.timezone.localdate", lambda: date(2026, 8, 21)
+    )
+
+
 def payment_graph() -> tuple[Any, Any, Any, Any, Any]:
     company = CompanyFactory.create()
     requester, verifier, approver, releaser = UserFactory.create_batch(4)

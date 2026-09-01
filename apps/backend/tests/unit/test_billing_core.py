@@ -1,6 +1,7 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -441,8 +442,11 @@ def test_overdue_collection_reminder_is_daily_idempotent_and_privacy_safe() -> N
     invoice.status = InvoiceStatus.ISSUED
     invoice.due_date = date(2026, 8, 1)
     invoice.save(update_fields=["status", "due_date"])
-    assert create_overdue_collection_reminders(as_of=date(2026, 8, 21), actor=graph["maker"]) == 1
-    assert create_overdue_collection_reminders(as_of=date(2026, 8, 21), actor=graph["maker"]) == 0
+    reminder_date = date(2026, 8, 21)
+    reminder_at = timezone.make_aware(datetime(2026, 8, 21, 12))
+    with patch("dsms.billing.services.timezone.now", return_value=reminder_at):
+        assert create_overdue_collection_reminders(as_of=reminder_date, actor=graph["maker"]) == 1
+        assert create_overdue_collection_reminders(as_of=reminder_date, actor=graph["maker"]) == 0
     event = NotificationEvent.objects.get(
         company=invoice.company, event_type="CLIENT_INVOICE_OVERDUE"
     )

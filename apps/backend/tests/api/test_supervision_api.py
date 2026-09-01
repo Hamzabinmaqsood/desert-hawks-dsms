@@ -15,6 +15,8 @@ from dsms.contracts.models import (
     ServiceContract,
 )
 from dsms.identity.enums import AccessScopeType
+from dsms.identity.models import User
+from dsms.organization.models import Branch
 from dsms.supervision.models import (
     CorrectiveAction,
     FieldEvidence,
@@ -25,6 +27,7 @@ from dsms.supervision.models import (
     SiteVisit,
     SupervisorVisitPlan,
 )
+from dsms.workforce.models import Employee
 from tests.factories.identity import RoleFactory, UserFactory, UserRoleAssignmentFactory
 from tests.factories.organization import BranchFactory
 from tests.factories.workforce import EmployeeFactory
@@ -32,7 +35,7 @@ from tests.factories.workforce import EmployeeFactory
 pytestmark = pytest.mark.django_db
 
 
-def grant(user, branch, *codenames: str) -> None:
+def grant(user: User, branch: Branch, *codenames: str) -> None:
     role = RoleFactory.create()
     role.permissions.set(
         Permission.objects.filter(content_type__app_label="supervision", codename__in=codenames)
@@ -46,7 +49,9 @@ def grant(user, branch, *codenames: str) -> None:
     )
 
 
-def supervision_context(branch, suffix: str):
+def supervision_context(
+    branch: Branch, suffix: str
+) -> tuple[User, Employee, SecuritySite, SiteVisit, GuardObservation, FieldEvidence]:
     actor = UserFactory.create()
     supervisor = EmployeeFactory.create(
         company=branch.company,
@@ -185,7 +190,7 @@ def test_supervision_observation_and_evidence_superuser_access() -> None:
     assert client.get(f"/api/v1/supervision/evidence/{evidence.id}/").status_code == 200
 
 
-def create_exception_records(branch, suffix: str) -> None:
+def create_exception_records(branch: Branch, suffix: str) -> None:
     actor, supervisor, site, visit, _, _ = supervision_context(branch, suffix)
     SupervisorVisitPlan.objects.create(
         company=branch.company,

@@ -46,7 +46,7 @@ format:
 	pnpm --filter admin-web format
 
 typecheck:
-	uv run --project apps/backend mypy apps/backend
+	uv run --directory apps/backend mypy .
 	pnpm --filter admin-web typecheck
 
 clean:

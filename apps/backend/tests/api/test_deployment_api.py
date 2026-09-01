@@ -14,6 +14,9 @@ from dsms.contracts.models import (
     ServiceContract,
 )
 from dsms.identity.enums import AccessScopeType
+from dsms.identity.models import User
+from dsms.organization.models import Branch
+from dsms.workforce.models import Employee
 from tests.factories.identity import RoleFactory, UserFactory, UserRoleAssignmentFactory
 from tests.factories.organization import BranchFactory
 from tests.factories.workforce import EmployeeFactory
@@ -21,7 +24,7 @@ from tests.factories.workforce import EmployeeFactory
 pytestmark = pytest.mark.django_db
 
 
-def grant_branch_permission(user, branch, codename: str) -> None:
+def grant_branch_permission(user: User, branch: Branch, codename: str) -> None:
     role = RoleFactory.create()
     role.permissions.add(
         Permission.objects.get(content_type__app_label="deployment", codename=codename)
@@ -35,7 +38,9 @@ def grant_branch_permission(user, branch, codename: str) -> None:
     )
 
 
-def eligibility_context(branch, suffix: str | None = None):
+def eligibility_context(
+    branch: Branch, suffix: str | None = None
+) -> tuple[Employee, SecuritySite, SecurityPost]:
     suffix = suffix or branch.code
     actor = UserFactory.create()
     employee = EmployeeFactory.create(
@@ -84,7 +89,7 @@ def eligibility_context(branch, suffix: str | None = None):
     return employee, site, post
 
 
-def eligibility_url(employee, site, post) -> str:
+def eligibility_url(employee: Employee, site: SecuritySite, post: SecurityPost) -> str:
     base = reverse("deployment-eligibility", kwargs={"employee_id": employee.id})
     return f"{base}?site={site.id}&post={post.id}"
 
