@@ -12,6 +12,7 @@ htmlcov/
 .venv/
 node_modules/
 .next/
+.next-e2e/
 playwright-report/
 test-results/
 staticfiles/

@@ -81,6 +81,8 @@ services:
       context: .
       dockerfile: apps/admin-web/Dockerfile
     env_file: .env
+    environment:
+      BACKEND_API_URL: http://backend:8000/api/v1
     command: pnpm dev --hostname 0.0.0.0
     volumes:
       - ./apps/admin-web:/workspace/apps/admin-web
