@@ -8,6 +8,9 @@ from .models import (
     AssetItem,
     AssetMovement,
     AssetStore,
+    ProcurementInventoryAllocation,
+    ProcurementInventoryHandoff,
+    ProcurementInventoryRegistration,
     StockAccount,
     StockTransaction,
 )
@@ -35,7 +38,13 @@ class AssetAdmin(admin.ModelAdmin[Asset]):
     )
 
 
-@admin.register(AssetMovement, StockTransaction)
+@admin.register(
+    AssetMovement,
+    StockTransaction,
+    ProcurementInventoryHandoff,
+    ProcurementInventoryRegistration,
+    ProcurementInventoryAllocation,
+)
 class ImmutableLedgerAdmin(admin.ModelAdmin[AssetMovement]):
     def has_add_permission(self, request: HttpRequest) -> bool:
         return False

@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Any
 
 from django.db.models import Q, QuerySet, Sum
@@ -15,8 +16,46 @@ from .models import (
     AssetItem,
     AssetMovement,
     AssetStore,
+    ProcurementInventoryHandoff,
+    ProcurementInventoryRegistration,
     StockAccount,
 )
+
+
+def procurement_registration_totals(*, handoff: ProcurementInventoryHandoff) -> dict[str, Decimal]:
+    registered = handoff.allocations.aggregate(total=Sum("quantity"))["total"] or Decimal("0")
+    return {
+        "accepted": handoff.accepted_quantity_snapshot,
+        "registered": registered,
+        "remaining": handoff.accepted_quantity_snapshot - registered,
+    }
+
+
+def accessible_procurement_registrations(
+    *, user: User
+) -> QuerySet[ProcurementInventoryRegistration]:
+    stores = accessible_asset_stores(
+        user=user, permission="assets.view_procurementinventoryregistration"
+    )
+    procurement_companies = access.get_accessible_company_ids(
+        user, permission="finance.view_purchasereceipt"
+    )
+    controlled = accessible_asset_stores(user=user, permission="assets.view_controlled_asset")
+    return (
+        ProcurementInventoryRegistration.objects.select_related(
+            "handoff__asset_item__category",
+            "handoff__receipt_line__receipt",
+            "destination_store",
+            "registered_by",
+        )
+        .prefetch_related("allocations__asset", "allocations__stock_transaction")
+        .filter(destination_store__in=stores, handoff__company_id__in=procurement_companies)
+        .filter(
+            Q(handoff__asset_item__category__is_controlled=False)
+            | Q(destination_store__in=controlled)
+        )
+        .order_by("-registered_at")
+    )
 
 
 def _company_scope(user: User, permission: str, *, include_global: bool = False) -> Q:

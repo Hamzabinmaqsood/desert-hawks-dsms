@@ -83,6 +83,14 @@ def test_bootstrap_creates_expected_system_roles() -> None:
     supervision_auditor = Role.objects.get(code="SUPERVISION_AUDITOR")
     assert supervision_auditor.permissions.filter(codename="view_guard_observation").exists()
     assert supervision_auditor.permissions.filter(codename="view_sensitive_field_evidence").exists()
+    asset_admin = Role.objects.get(code="ASSET_ADMIN")
+    asset_custodian = Role.objects.get(code="ASSET_CUSTODIAN")
+    for role in (asset_admin, asset_custodian):
+        assert role.permissions.filter(codename="register_asset").exists()
+        assert role.permissions.filter(codename="receive_asset_stock").exists()
+        assert role.permissions.filter(codename="view_purchasereceipt").exists()
+    employee_role = Role.objects.get(code="LEAVE_SELF_SERVICE")
+    assert not employee_role.permissions.filter(codename="register_asset").exists()
 
 
 def test_bootstrap_is_idempotent() -> None:

@@ -7,6 +7,8 @@ from .views import (
     AssetMovementViewSet,
     AssetStoreViewSet,
     AssetViewSet,
+    ProcurementReceiptLineViewSet,
+    ProcurementRegistrationViewSet,
     StockAccountViewSet,
 )
 
@@ -18,4 +20,10 @@ router.register("assets", AssetViewSet, basename="asset")
 router.register("stock-accounts", StockAccountViewSet, basename="stock-account")
 router.register("issues", AssetIssueViewSet, basename="asset-issue")
 router.register("movements", AssetMovementViewSet, basename="asset-movement")
+router.register(
+    "procurement-registrations", ProcurementRegistrationViewSet, basename="procurement-registration"
+)
+router.register(
+    "procurement-receipt-lines", ProcurementReceiptLineViewSet, basename="procurement-receipt-line"
+)
 urlpatterns = router.urls

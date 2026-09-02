@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -59,6 +59,8 @@ class AssetCategory(AssetBase):
             ("approve_asset_issue", "Can approve asset issues"),
             ("issue_asset", "Can issue assets"),
             ("adjust_stock", "Can post stock adjustments"),
+            ("register_asset", "Can register serialized procurement assets"),
+            ("receive_asset_stock", "Can receive procurement stock"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -503,6 +505,123 @@ class AssetMovement(UUIDModel):
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValidationError("Asset movements cannot be deleted.")
+
+
+class ImmutableProcurementRecord(UUIDModel):
+    class Meta:
+        abstract = True
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        model = cast(Any, type(self))
+        if self.pk and model.objects.filter(pk=self.pk).exists():
+            raise ValidationError("Procurement inventory records are immutable.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ValidationError("Procurement inventory records cannot be deleted.")
+
+
+class ProcurementInventoryHandoff(ImmutableProcurementRecord):
+    receipt_line = models.OneToOneField(
+        "finance.PurchaseReceiptLine", on_delete=models.PROTECT, related_name="inventory_handoff"
+    )
+    company = models.ForeignKey("organization.Company", on_delete=models.PROTECT)
+    asset_item = models.ForeignKey(AssetItem, on_delete=models.PROTECT)
+    tracking_method = models.CharField(max_length=20, choices=TrackingMethod.choices)
+    accepted_quantity_snapshot = models.DecimalField(max_digits=18, decimal_places=4)
+    unit_cost_snapshot = models.DecimalField(max_digits=18, decimal_places=2)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(accepted_quantity_snapshot__gt=0),
+                name="proc_handoff_accepted_positive",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["company", "created_at"], name="proc_handoff_company_time_idx")
+        ]
+
+
+class ProcurementInventoryRegistration(ImmutableProcurementRecord):
+    handoff = models.ForeignKey(
+        ProcurementInventoryHandoff, on_delete=models.PROTECT, related_name="registrations"
+    )
+    company = models.ForeignKey("organization.Company", on_delete=models.PROTECT)
+    destination_store = models.ForeignKey(AssetStore, on_delete=models.PROTECT)
+    registration_number = models.CharField(max_length=50)
+    idempotency_key = models.UUIDField()
+    payload_hash = models.CharField(max_length=64)
+    registered_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    registered_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["company", "idempotency_key"], name="proc_registration_company_key_uniq"
+            ),
+            models.UniqueConstraint(
+                fields=["company", "registration_number"],
+                name="proc_registration_company_number_uniq",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["handoff", "registered_at"], name="proc_reg_handoff_time_idx"),
+            models.Index(fields=["company", "registered_at"], name="proc_reg_company_time_idx"),
+            models.Index(
+                fields=["destination_store", "registered_at"], name="proc_reg_store_time_idx"
+            ),
+        ]
+
+
+class ProcurementInventoryAllocation(ImmutableProcurementRecord):
+    handoff = models.ForeignKey(
+        ProcurementInventoryHandoff, on_delete=models.PROTECT, related_name="allocations"
+    )
+    registration = models.ForeignKey(
+        ProcurementInventoryRegistration, on_delete=models.PROTECT, related_name="allocations"
+    )
+    receipt_unit_key = models.CharField(max_length=150, null=True, blank=True)
+    quantity = models.DecimalField(max_digits=18, decimal_places=4)
+    asset = models.OneToOneField(
+        Asset,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="procurement_allocation",
+    )
+    stock_transaction = models.OneToOneField(
+        StockTransaction,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="procurement_allocation",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(quantity__gt=0), name="proc_allocation_qty_positive"
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(asset__isnull=False, stock_transaction__isnull=True)
+                    | Q(asset__isnull=True, stock_transaction__isnull=False)
+                ),
+                name="proc_allocation_result_xor",
+            ),
+            models.UniqueConstraint(
+                fields=["handoff", "receipt_unit_key"],
+                condition=Q(receipt_unit_key__isnull=False) & ~Q(receipt_unit_key=""),
+                name="proc_allocation_handoff_unit_uniq",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["handoff", "created_at"], name="proc_alloc_handoff_time_idx")
+        ]
 
 
 class AssetKitTemplate(AssetBase):

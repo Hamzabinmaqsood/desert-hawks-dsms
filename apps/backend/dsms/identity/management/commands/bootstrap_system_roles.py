@@ -1097,7 +1097,13 @@ _SYSTEM_ROLES: list[dict[str, Any]] = [
                 "approve_asset_issue",
                 "issue_asset",
                 "adjust_stock",
+                "register_asset",
+                "receive_asset_stock",
             )
+        ]
+        + [
+            ("assets", "view_procurementinventoryregistration"),
+            ("finance", "view_purchasereceipt"),
         ],
     },
     {
@@ -1112,8 +1118,12 @@ _SYSTEM_ROLES: list[dict[str, Any]] = [
                 "change_assetissue",
                 "approve_asset_issue",
                 "issue_asset",
+                "register_asset",
+                "receive_asset_stock",
+                "view_procurementinventoryregistration",
             )
-        ],
+        ]
+        + [("finance", "view_purchasereceipt")],
     },
     {
         "code": "HR_CASE_MANAGER",
