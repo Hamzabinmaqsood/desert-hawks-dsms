@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
@@ -157,6 +158,16 @@ class PurchaseReceipt(UUIDModel, TimeStampedModel):
             )
         ]
 
+    def clean(self) -> None:
+        if (
+            self.purchase_order_id
+            and self.company_id
+            and self.purchase_order.company_id != self.company_id
+        ):
+            raise ValidationError(
+                {"purchase_order": "Purchase order must belong to the receipt company."}
+            )
+
 
 class PurchaseReceiptLine(UUIDModel):
     receipt = models.ForeignKey(PurchaseReceipt, on_delete=models.PROTECT, related_name="lines")
@@ -166,6 +177,40 @@ class PurchaseReceiptLine(UUIDModel):
     quantity = models.DecimalField(max_digits=18, decimal_places=4)
     accepted_quantity = models.DecimalField(max_digits=18, decimal_places=4)
     notes = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(quantity__gt=0), name="receipt_line_qty_positive"),
+            models.CheckConstraint(
+                condition=Q(accepted_quantity__gte=0),
+                name="receipt_line_accepted_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=Q(accepted_quantity__lte=models.F("quantity")),
+                name="receipt_line_accepted_lte_qty",
+            ),
+            models.UniqueConstraint(
+                fields=["receipt", "purchase_order_line"], name="uniq_receipt_po_line"
+            ),
+        ]
+
+    def clean(self) -> None:
+        errors = {}
+        if self.quantity is not None and self.quantity <= 0:
+            errors["quantity"] = "Received quantity must be positive."
+        if self.accepted_quantity is not None:
+            if self.accepted_quantity < 0:
+                errors["accepted_quantity"] = "Accepted quantity cannot be negative."
+            elif self.quantity is not None and self.accepted_quantity > self.quantity:
+                errors["accepted_quantity"] = "Accepted quantity cannot exceed received quantity."
+        if (
+            self.receipt_id
+            and self.purchase_order_line_id
+            and self.purchase_order_line.purchase_order_id != self.receipt.purchase_order_id
+        ):
+            errors["purchase_order_line"] = "Purchase-order line does not belong to the receipt."
+        if errors:
+            raise ValidationError(errors)
 
 
 class VendorBill(UUIDModel, TimeStampedModel):

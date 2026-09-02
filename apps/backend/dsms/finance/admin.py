@@ -14,6 +14,7 @@ from .models import (
     JournalEntry,
     JournalLine,
 )
+from .procurement_models import PurchaseReceiptLine
 
 
 class NoDeleteAdmin(admin.ModelAdmin[Any]):
@@ -137,6 +138,8 @@ class ProtectedFinanceAdmin(NoDeleteAdmin):
         }
         names = {field.name for field in self.model._meta.fields}
         readonly = names & always_sensitive
+        if isinstance(obj, PurchaseReceiptLine) and obj.receipt.status == "APPROVED":
+            return tuple(sorted(names))
         if obj is not None and getattr(obj, "status", None) in protected_statuses:
             readonly = names
         return tuple(sorted(readonly))

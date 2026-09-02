@@ -1,10 +1,15 @@
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 import pytest
+from django.contrib import admin
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.test import RequestFactory
 
-from dsms.finance import domain_services
+from dsms.finance import domain_selectors, domain_services
+from dsms.finance.admin import ProtectedFinanceAdmin
 from dsms.finance.enums import MatchType, ReceiptType, WorkflowStatus
 from dsms.finance.exceptions import FinanceValidationError
 from dsms.finance.procurement_models import (
@@ -214,3 +219,260 @@ def test_duplicate_invoice_and_overpayment_are_blocked(procurement) -> None:  # 
         domain_services.pay_vendor_voucher(
             voucher=voucher, actor=checker, cash_account=accounts["cash"], reference="X"
         )
+
+
+@pytest.mark.parametrize(
+    ("quantity", "accepted", "field"),
+    [
+        (Decimal("0"), Decimal("0"), "quantity"),
+        (Decimal("-1"), Decimal("0"), "quantity"),
+        (Decimal("1"), Decimal("-1"), "accepted_quantity"),
+        (Decimal("1"), Decimal("2"), "accepted_quantity"),
+    ],
+)
+def test_receipt_line_quantity_model_validation(
+    procurement: Any, quantity: Decimal, accepted: Decimal, field: str
+) -> None:
+    company, maker, _checker, _accounts, _vendor, order, order_line = procurement
+    receipt = PurchaseReceipt.objects.create(
+        company=company,
+        purchase_order=order,
+        receipt_number=f"INVALID-{quantity}-{accepted}",
+        receipt_date=date(2026, 8, 12),
+        receipt_type=ReceiptType.GOODS,
+        received_by=maker,
+    )
+    line = PurchaseReceiptLine(
+        receipt=receipt,
+        purchase_order_line=order_line,
+        quantity=quantity,
+        accepted_quantity=accepted,
+    )
+    with pytest.raises(ValidationError) as exc_info:
+        line.full_clean(validate_unique=False, validate_constraints=False)
+    assert field in exc_info.value.message_dict
+
+
+@pytest.mark.parametrize(
+    ("quantity", "accepted"),
+    [
+        (Decimal("0"), Decimal("0")),
+        (Decimal("-1"), Decimal("0")),
+        (Decimal("1"), Decimal("-1")),
+        (Decimal("1"), Decimal("2")),
+    ],
+)
+def test_receipt_line_quantity_database_constraints(
+    procurement: Any, quantity: Decimal, accepted: Decimal
+) -> None:
+    company, maker, _checker, _accounts, _vendor, order, order_line = procurement
+    receipt = PurchaseReceipt.objects.create(
+        company=company,
+        purchase_order=order,
+        receipt_number=f"DB-INVALID-{quantity}-{accepted}",
+        receipt_date=date(2026, 8, 12),
+        receipt_type=ReceiptType.GOODS,
+        received_by=maker,
+    )
+    with pytest.raises(IntegrityError), transaction.atomic():
+        PurchaseReceiptLine.objects.create(
+            receipt=receipt,
+            purchase_order_line=order_line,
+            quantity=quantity,
+            accepted_quantity=accepted,
+        )
+
+
+def test_receipt_rejects_duplicate_po_line_but_allows_separate_receipts(procurement) -> None:  # type: ignore[no-untyped-def]
+    company, maker, _checker, _accounts, _vendor, order, order_line = procurement
+    first = PurchaseReceipt.objects.create(
+        company=company,
+        purchase_order=order,
+        receipt_number="DUP-LINE-1",
+        receipt_date=date(2026, 8, 12),
+        receipt_type=ReceiptType.GOODS,
+        received_by=maker,
+    )
+    PurchaseReceiptLine.objects.create(
+        receipt=first,
+        purchase_order_line=order_line,
+        quantity=Decimal("4"),
+        accepted_quantity=Decimal("4"),
+    )
+    with pytest.raises(IntegrityError), transaction.atomic():
+        PurchaseReceiptLine.objects.create(
+            receipt=first,
+            purchase_order_line=order_line,
+            quantity=Decimal("1"),
+            accepted_quantity=Decimal("1"),
+        )
+    second = PurchaseReceipt.objects.create(
+        company=company,
+        purchase_order=order,
+        receipt_number="DUP-LINE-2",
+        receipt_date=date(2026, 8, 13),
+        receipt_type=ReceiptType.GOODS,
+        received_by=maker,
+    )
+    PurchaseReceiptLine.objects.create(
+        receipt=second,
+        purchase_order_line=order_line,
+        quantity=Decimal("6"),
+        accepted_quantity=Decimal("6"),
+    )
+    assert PurchaseReceiptLine.objects.filter(purchase_order_line=order_line).count() == 2
+
+
+def test_confirmation_validates_po_state_company_and_line_relationship(procurement) -> None:  # type: ignore[no-untyped-def]
+    company, maker, _checker, _accounts, vendor, order, order_line = procurement
+    order.status = WorkflowStatus.DRAFT
+    order.save(update_fields=["status"])
+    draft_po_receipt = PurchaseReceipt.objects.create(
+        company=company,
+        purchase_order=order,
+        receipt_number="DRAFT-PO",
+        receipt_date=date(2026, 8, 12),
+        receipt_type=ReceiptType.GOODS,
+        received_by=maker,
+    )
+    PurchaseReceiptLine.objects.create(
+        receipt=draft_po_receipt,
+        purchase_order_line=order_line,
+        quantity=1,
+        accepted_quantity=1,
+    )
+    with pytest.raises(FinanceValidationError) as exc_info:
+        domain_services.confirm_receipt(receipt=draft_po_receipt)
+    assert "approved purchase order" in str(exc_info.value.detail)
+
+    order.status = WorkflowStatus.APPROVED
+    order.save(update_fields=["status"])
+    other_company = CompanyFactory.create()
+    wrong_company_receipt = PurchaseReceipt.objects.create(
+        company=other_company,
+        purchase_order=order,
+        receipt_number="WRONG-COMPANY",
+        receipt_date=date(2026, 8, 12),
+        receipt_type=ReceiptType.GOODS,
+        received_by=maker,
+    )
+    PurchaseReceiptLine.objects.create(
+        receipt=wrong_company_receipt,
+        purchase_order_line=order_line,
+        quantity=1,
+        accepted_quantity=1,
+    )
+    with pytest.raises(FinanceValidationError) as exc_info:
+        domain_services.confirm_receipt(receipt=wrong_company_receipt)
+    assert "same company" in str(exc_info.value.detail)
+
+    other_order = PurchaseOrder.objects.create(
+        company=company,
+        requisition=order.requisition,
+        vendor=vendor,
+        order_number="PO-OTHER",
+        order_date=date(2026, 8, 11),
+        status=WorkflowStatus.APPROVED,
+        created_by=maker,
+    )
+    other_line = PurchaseOrderLine.objects.create(
+        purchase_order=other_order,
+        requisition_line=order_line.requisition_line,
+        description="Other radios",
+        quantity=1,
+        unit_price=Decimal("100"),
+    )
+    cross_po_receipt = PurchaseReceipt.objects.create(
+        company=company,
+        purchase_order=order,
+        receipt_number="CROSS-PO",
+        receipt_date=date(2026, 8, 12),
+        receipt_type=ReceiptType.GOODS,
+        received_by=maker,
+    )
+    PurchaseReceiptLine.objects.create(
+        receipt=cross_po_receipt,
+        purchase_order_line=other_line,
+        quantity=1,
+        accepted_quantity=1,
+    )
+    with pytest.raises(FinanceValidationError) as exc_info:
+        domain_services.confirm_receipt(receipt=cross_po_receipt)
+    assert "another purchase order" in str(exc_info.value.detail)
+
+
+def test_partial_receipts_exactly_fill_order_and_inventory_eligibility(procurement) -> None:  # type: ignore[no-untyped-def]
+    company, maker, _checker, _accounts, _vendor, order, order_line = procurement
+    lines = []
+    for number, receipt_type, quantity in (
+        ("ELIGIBLE-4", ReceiptType.GOODS, Decimal("4")),
+        ("ELIGIBLE-6", ReceiptType.GOODS, Decimal("6")),
+    ):
+        receipt = PurchaseReceipt.objects.create(
+            company=company,
+            purchase_order=order,
+            receipt_number=number,
+            receipt_date=date(2026, 8, 12),
+            receipt_type=receipt_type,
+            received_by=maker,
+        )
+        line = PurchaseReceiptLine.objects.create(
+            receipt=receipt,
+            purchase_order_line=order_line,
+            quantity=quantity,
+            accepted_quantity=quantity,
+        )
+        domain_services.confirm_receipt(receipt=receipt)
+        lines.append(line)
+    assert all(
+        domain_selectors.is_inventory_registration_eligible(receipt_line=line) for line in lines
+    )
+
+
+def test_service_receipt_can_confirm_but_is_not_inventory_eligible(procurement) -> None:  # type: ignore[no-untyped-def]
+    company, maker, _checker, _accounts, _vendor, order, order_line = procurement
+    receipt = PurchaseReceipt.objects.create(
+        company=company,
+        purchase_order=order,
+        receipt_number="SERVICE-RECEIPT",
+        receipt_date=date(2026, 8, 12),
+        receipt_type=ReceiptType.SERVICE,
+        received_by=maker,
+    )
+    line = PurchaseReceiptLine.objects.create(
+        receipt=receipt,
+        purchase_order_line=order_line,
+        quantity=1,
+        accepted_quantity=1,
+    )
+    confirmed = domain_services.confirm_receipt(receipt=receipt)
+    line.refresh_from_db()
+    assert confirmed.status == WorkflowStatus.APPROVED
+    assert not domain_selectors.is_inventory_registration_eligible(receipt_line=line)
+
+
+def test_approved_receipt_line_is_readonly_in_supported_admin(procurement) -> None:  # type: ignore[no-untyped-def]
+    company, maker, _checker, _accounts, _vendor, order, order_line = procurement
+    receipt = PurchaseReceipt.objects.create(
+        company=company,
+        purchase_order=order,
+        receipt_number="ADMIN-LOCKED",
+        receipt_date=date(2026, 8, 12),
+        receipt_type=ReceiptType.GOODS,
+        received_by=maker,
+    )
+    line = PurchaseReceiptLine.objects.create(
+        receipt=receipt,
+        purchase_order_line=order_line,
+        quantity=1,
+        accepted_quantity=1,
+    )
+    domain_services.confirm_receipt(receipt=receipt)
+    line.refresh_from_db()
+    model_admin = admin.site._registry[PurchaseReceiptLine]
+    assert isinstance(model_admin, ProtectedFinanceAdmin)
+    request = RequestFactory().get("/admin/")
+    request.user = UserFactory.create(is_superuser=True)
+    assert set(model_admin.get_readonly_fields(request, line)) == {
+        field.name for field in PurchaseReceiptLine._meta.fields
+    }

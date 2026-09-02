@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from dsms.workforce.models import Employee
 
-from .enums import AccountType, PaymentStatus, ReconciliationStatus, WorkflowStatus
+from .enums import AccountType, PaymentStatus, ReceiptType, ReconciliationStatus, WorkflowStatus
 from .models import JournalEntry, JournalLine
 from .operations_models import (
     BankStatementLine,
@@ -31,6 +31,7 @@ from .procurement_models import (
     PaymentVoucher,
     PurchaseOrder,
     PurchaseOrderLine,
+    PurchaseReceiptLine,
     PurchaseRequisition,
     Vendor,
     VendorBill,
@@ -38,6 +39,21 @@ from .procurement_models import (
 
 ZERO = Decimal("0.00")
 MONEY_FIELD: Any = DecimalField(max_digits=18, decimal_places=2)
+
+
+def is_inventory_registration_eligible(*, receipt_line: PurchaseReceiptLine) -> bool:
+    """Whether an accepted procurement line is an authoritative physical-inventory source."""
+    return PurchaseReceiptLine.objects.filter(
+        pk=receipt_line.pk,
+        receipt__status=WorkflowStatus.APPROVED,
+        receipt__receipt_type=ReceiptType.GOODS,
+        receipt__purchase_order__status=WorkflowStatus.APPROVED,
+        receipt__company_id=F("receipt__purchase_order__company_id"),
+        purchase_order_line__purchase_order_id=F("receipt__purchase_order_id"),
+        quantity__gt=0,
+        accepted_quantity__gt=0,
+        accepted_quantity__lte=F("quantity"),
+    ).exists()
 
 
 def _sum(queryset: QuerySet[Any], field: str) -> Decimal:

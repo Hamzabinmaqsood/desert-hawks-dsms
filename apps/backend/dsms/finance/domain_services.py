@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models, transaction
 from django.db.models import Sum
 from django.utils import timezone
@@ -55,6 +56,7 @@ from .payroll_models import (
 )
 from .procurement_models import (
     PaymentVoucher,
+    PurchaseOrderLine,
     PurchaseReceipt,
     PurchaseReceiptLine,
     VendorBill,
@@ -552,20 +554,72 @@ def recover_employee_advance(
 
 @transaction.atomic
 def confirm_receipt(*, receipt: PurchaseReceipt) -> PurchaseReceipt:
-    locked = PurchaseReceipt.objects.select_for_update().get(pk=receipt.pk)
+    locked = (
+        PurchaseReceipt.objects.select_for_update(of=("self",))
+        .select_related("purchase_order__vendor", "purchase_order__requisition")
+        .get(pk=receipt.pk)
+    )
     if locked.status != WorkflowStatus.DRAFT:
         raise InvalidFinanceTransitionError("Only a draft receipt can be confirmed.")
-    for line in locked.lines.select_related("purchase_order_line"):
+
+    purchase_order = locked.purchase_order
+    if purchase_order.status != WorkflowStatus.APPROVED:
+        raise FinanceValidationError(
+            {"purchase_order": ["Only an approved purchase order can be received."]}
+        )
+    if purchase_order.company_id != locked.company_id:
+        raise FinanceValidationError(
+            {"company": ["Receipt and purchase order must belong to the same company."]}
+        )
+    if (
+        purchase_order.vendor.company_id != locked.company_id
+        or purchase_order.requisition.company_id != locked.company_id
+    ):
+        raise FinanceValidationError(
+            {"company": ["Purchase-order vendor and requisition must match the receipt company."]}
+        )
+
+    line_ids = list(
+        PurchaseReceiptLine.objects.filter(receipt=locked).values_list(
+            "purchase_order_line_id", flat=True
+        )
+    )
+    if not line_ids:
+        raise FinanceValidationError({"lines": ["A receipt must contain at least one line."]})
+
+    purchase_order_lines = {
+        line.pk: line
+        for line in PurchaseOrderLine.objects.select_for_update()
+        .filter(pk__in=line_ids)
+        .order_by("pk")
+    }
+    receipt_lines = list(
+        PurchaseReceiptLine.objects.select_for_update()
+        .filter(receipt=locked)
+        .select_related("receipt", "purchase_order_line")
+        .order_by("pk")
+    )
+    for line in receipt_lines:
+        purchase_order_line = purchase_order_lines[line.purchase_order_line_id]
+        if purchase_order_line.purchase_order_id != purchase_order.pk:
+            raise FinanceValidationError(
+                {"purchase_order_line": ["Receipt line belongs to another purchase order."]}
+            )
+        try:
+            line.full_clean()
+        except DjangoValidationError as exc:
+            detail = exc.message_dict if hasattr(exc, "message_dict") else {"lines": exc.messages}
+            raise FinanceValidationError(detail) from exc
         prior = (
             PurchaseReceiptLine.objects.filter(
-                purchase_order_line=line.purchase_order_line,
+                purchase_order_line=purchase_order_line,
                 receipt__status=WorkflowStatus.APPROVED,
             )
             .exclude(receipt=locked)
             .aggregate(total=Sum("accepted_quantity"))["total"]
             or ZERO
         )
-        if prior + line.accepted_quantity > line.purchase_order_line.quantity:
+        if prior + line.accepted_quantity > purchase_order_line.quantity:
             raise FinanceValidationError({"quantity": ["Receipt exceeds ordered quantity."]})
     locked.status = WorkflowStatus.APPROVED
     locked.save(update_fields=["status", "updated_at"])
