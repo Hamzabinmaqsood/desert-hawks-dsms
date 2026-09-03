@@ -992,7 +992,15 @@ _SYSTEM_ROLES: list[dict[str, Any]] = [
         )
         + [
             ("billing", code)
-            for code in ("approve_invoice", "issue_invoice", "void_invoice", "download_invoice")
+            for code in (
+                "approve_invoice",
+                "issue_invoice",
+                "void_invoice",
+                "download_invoice",
+                "confirm_receipt",
+                "allocate_receipt",
+                "reverse_receipt",
+            )
         ],
     },
     {

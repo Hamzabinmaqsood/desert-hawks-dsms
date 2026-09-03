@@ -356,6 +356,11 @@ class ClientReceipt(BillingModel):
                 condition=Q(amount__gt=0), name="billing_receipt_amount_positive"
             ),
         ]
+        permissions = [
+            ("confirm_receipt", "Can confirm client receipts"),
+            ("allocate_receipt", "Can allocate client receipts"),
+            ("reverse_receipt", "Can reverse client receipts"),
+        ]
 
 
 class ClientReceiptAllocation(UUIDModel):

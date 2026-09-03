@@ -148,14 +148,14 @@ def test_invoice_server_totals_snapshots_and_input_guards() -> None:
     assert line.description == "Guarding service"
     assert line.line_total == Decimal("209.00")
 
-    with pytest.raises(ValidationError, match="At least one"):
-        create_invoice(
-            profile=graph["profile"],
-            actor=graph["maker"],
-            invoice_date=date(2026, 8, 1),
-            invoice_type=InvoiceType.STANDARD,
-            lines=[],
-        )
+    empty = create_invoice(
+        profile=graph["profile"],
+        actor=graph["maker"],
+        invoice_date=date(2026, 8, 1),
+        invoice_type=InvoiceType.STANDARD,
+        lines=[],
+    )
+    assert empty.status == InvoiceStatus.DRAFT and not empty.lines.exists()
     graph["profile"].is_active = False
     graph["profile"].save(update_fields=["is_active"])
     with pytest.raises(ValidationError, match="Inactive"):
