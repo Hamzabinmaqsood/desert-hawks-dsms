@@ -18,6 +18,57 @@ const readJsonBody = (request) =>
     });
   });
 
+const MAKER_ID = "00000000-0000-0000-0000-000000000001";
+const APPROVER_ID = "00000000-0000-0000-0000-000000000002";
+
+// Two logical actors so maker/checker separation is exercised for real: the
+// maker may author and submit, the approver may approve, issue and download.
+// Neither set is a superset of the other.
+const AUTHORING_PERMISSIONS = [
+  "billing.view_clientinvoice",
+  "billing.add_clientinvoice",
+  "billing.change_clientinvoice",
+];
+
+const ACTORS = {
+  employee: {
+    id: MAKER_ID,
+    email: "employee@example.test",
+    first_name: "Test",
+    last_name: "Employee",
+    permissions: AUTHORING_PERMISSIONS,
+  },
+  maker: {
+    id: MAKER_ID,
+    email: "maker@example.test",
+    first_name: "Test",
+    last_name: "Employee",
+    permissions: AUTHORING_PERMISSIONS,
+  },
+  approver: {
+    id: APPROVER_ID,
+    email: "approver@example.test",
+    first_name: "Test",
+    last_name: "Approver",
+    permissions: [
+      "billing.view_clientinvoice",
+      "billing.approve_invoice",
+      "billing.issue_invoice",
+      "billing.download_invoice",
+    ],
+  },
+};
+
+const actorKeyForEmail = (email) => {
+  const key = String(email ?? "").split("@")[0];
+  return Object.hasOwn(ACTORS, key) ? key : "employee";
+};
+
+const actorForToken = (authorization) => {
+  const key = String(authorization ?? "").split("-")[2];
+  return ACTORS[key] ?? ACTORS.employee;
+};
+
 const DRAFT_ID = "90000000-0000-0000-0000-000000000001";
 const ACCOUNT_ID = "50000000-0000-0000-0000-000000000099";
 
@@ -155,15 +206,19 @@ createServer(async (request, response) => {
   const path = request.url;
   if (path === "/api/v1/health/") return json(response, 200, { status: "ok" });
   if (path === "/api/v1/auth/login/" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    const key = actorKeyForEmail(body.email);
     return json(response, 200, {
-      access: "e2e-access",
-      refresh: "e2e-refresh",
+      access: `e2e-access-${key}`,
+      refresh: `e2e-refresh-${key}`,
     });
   }
   if (path === "/api/v1/auth/refresh/" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    const key = String(body.refresh ?? "").split("-")[2];
     return json(response, 200, {
-      access: "e2e-access-rotated",
-      refresh: "e2e-refresh-rotated",
+      access: `e2e-access-${key ?? "employee"}-rotated`,
+      refresh: `e2e-refresh-${key ?? "employee"}-rotated`,
     });
   }
   if (path === "/api/v1/auth/logout/" && request.method === "POST") {
@@ -173,12 +228,13 @@ createServer(async (request, response) => {
   if (!request.headers.authorization?.startsWith("Bearer e2e-access")) {
     return json(response, 401, { detail: "Unauthenticated" });
   }
+  const actor = actorForToken(request.headers.authorization);
   if (path === "/api/v1/auth/me/") {
     return json(response, 200, {
-      id: "00000000-0000-0000-0000-000000000001",
-      email: "employee@example.test",
-      first_name: "Test",
-      last_name: "Employee",
+      id: actor.id,
+      email: actor.email,
+      first_name: actor.first_name,
+      last_name: actor.last_name,
       is_active: true,
       is_staff: false,
       is_superuser: false,
@@ -189,13 +245,7 @@ createServer(async (request, response) => {
     });
   }
   if (path === "/api/v1/auth/me/permissions/") {
-    return json(response, 200, {
-      permissions: [
-        "billing.view_clientinvoice",
-        "billing.add_clientinvoice",
-        "billing.change_clientinvoice",
-      ],
-    });
+    return json(response, 200, { permissions: actor.permissions });
   }
   if (path === "/api/v1/auth/me/access-scopes/") {
     return json(response, 200, {
@@ -357,6 +407,61 @@ createServer(async (request, response) => {
     });
     recomputeTotals();
     return json(response, 200, existing);
+  }
+  // Workflow transitions mirror the backend state machine: each one accepts a
+  // single source status, and approval enforces maker/checker. Nothing here
+  // succeeds unconditionally.
+  if (
+    path === `/api/v1/billing/invoices/${DRAFT_ID}/submit/` &&
+    request.method === "POST"
+  ) {
+    if (draft.status !== "DRAFT" || draft.lines.length === 0)
+      return json(response, 400, {
+        detail: ["Only a non-empty draft invoice can be submitted."],
+      });
+    draft.status = "UNDER_REVIEW";
+    return json(response, 200, draft);
+  }
+  if (
+    path === `/api/v1/billing/invoices/${DRAFT_ID}/approve/` &&
+    request.method === "POST"
+  ) {
+    if (draft.status !== "UNDER_REVIEW")
+      return json(response, 400, { detail: ["Invoice is not under review."] });
+    if (draft.generated_by === actor.id)
+      return json(response, 400, {
+        detail: ["Maker/checker policy prevents self-approval."],
+      });
+    draft.status = "APPROVED";
+    draft.approved_by = actor.id;
+    draft.approved_at = "2026-09-02T10:00:00Z";
+    return json(response, 200, draft);
+  }
+  if (
+    path === `/api/v1/billing/invoices/${DRAFT_ID}/issue/` &&
+    request.method === "POST"
+  ) {
+    if (draft.status !== "APPROVED")
+      return json(response, 400, {
+        detail: ["Only approved invoices can be issued."],
+      });
+    draft.status = "ISSUED";
+    draft.issued_by = actor.id;
+    draft.issued_at = "2026-09-03T10:00:00Z";
+    draft.posted_at = "2026-09-03T10:00:00Z";
+    draft.pdf_available = true;
+    return json(response, 200, draft);
+  }
+  if (path === `/api/v1/billing/invoices/${DRAFT_ID}/download/`) {
+    if (!draft.pdf_available)
+      return json(response, 404, { detail: "Not found" });
+    response.writeHead(200, {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${draft.invoice_number}.pdf"`,
+    });
+    return response.end(
+      ["%PDF-1.4", "% e2e fake invoice", "%%EOF", ""].join("\n"),
+    );
   }
   if (
     path?.startsWith("/api/v1/billing/invoices/?") ||

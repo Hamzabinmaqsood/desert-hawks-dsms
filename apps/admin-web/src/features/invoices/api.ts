@@ -69,3 +69,22 @@ export function deleteInvoiceLine(id: string, lineId: string) {
     { method: "DELETE" },
   );
 }
+
+function workflowTransition(id: string, action: string) {
+  return apiFetch<InvoiceDetail>(
+    `/api/invoices/${encodeURIComponent(id)}/${action}`,
+    { method: "POST" },
+  );
+}
+
+export function submitInvoice(id: string) {
+  return workflowTransition(id, "submit");
+}
+
+export function approveInvoice(id: string) {
+  return workflowTransition(id, "approve");
+}
+
+export function issueInvoice(id: string) {
+  return workflowTransition(id, "issue");
+}

@@ -19,6 +19,7 @@ import {
   PrivateDocumentDownload,
 } from "./components";
 import type { InvoiceDetail } from "./types";
+import { InvoiceWorkflowActions } from "./workflow-actions";
 
 export function InvoiceDetailPage({ id }: { id: string }) {
   const auth = useAuth();
@@ -81,6 +82,7 @@ export function InvoiceDetailPage({ id }: { id: string }) {
         <span>Invoice date {formatDate(invoice.invoice_date)}</span>
         <span>Due {formatDate(invoice.due_date)}</span>
       </div>
+      <InvoiceWorkflowActions invoice={invoice} onChanged={setInvoice} />
       <InvoiceDetailSection title="Financial summary">
         <InvoiceTotals invoice={invoice} />
       </InvoiceDetailSection>

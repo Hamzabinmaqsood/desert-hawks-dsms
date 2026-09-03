@@ -113,6 +113,19 @@ a:focus-visible {
   color: var(--danger);
   font-size: 0.875rem;
 }
+.field-hint {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.workflow-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+.workflow-actions .filter-actions {
+  flex-wrap: wrap;
+}
 .form-error {
   background: #fff1f1;
   border-radius: 0.45rem;
