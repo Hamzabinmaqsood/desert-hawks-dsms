@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { PageHeader } from "@/components/layout/page-header";
@@ -63,6 +64,13 @@ export function InvoiceListPage({
       <PageHeader
         title="Invoices"
         description="Review issued and in-progress client invoices."
+        actions={
+          auth.can("billing.add_clientinvoice") ? (
+            <Link className="button" href="/invoices/new">
+              New Invoice
+            </Link>
+          ) : undefined
+        }
       />
       <InvoiceFilters values={searchParams} />
       {error ? (

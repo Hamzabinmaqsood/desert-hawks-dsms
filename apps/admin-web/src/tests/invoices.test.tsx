@@ -189,6 +189,29 @@ describe("invoice screens", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("shows the New Invoice CTA only with create permission", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({ count: 0, next: null, previous: null, results: [] }),
+      ),
+    );
+    const withCreate = renderWithSession(
+      <InvoiceListPage searchParams={{}} />,
+      ["billing.view_clientinvoice", "billing.add_clientinvoice"],
+    );
+    expect(
+      await withCreate.findByRole("link", { name: "New Invoice" }),
+    ).toBeTruthy();
+    withCreate.unmount();
+
+    renderWithSession(<InvoiceListPage searchParams={{}} />, [
+      "billing.view_clientinvoice",
+    ]);
+    await screen.findByText("No invoices found.");
+    expect(screen.queryByRole("link", { name: "New Invoice" })).toBeNull();
+  });
+
   it("renders detail totals, lines, workflow metadata and permitted PDF action", async () => {
     vi.stubGlobal(
       "fetch",

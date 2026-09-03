@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
+from dsms.finance.enums import AccountType
 from dsms.finance.models import AccountingPeriod
 from dsms.finance.services import (
     approve_journal,
@@ -279,6 +280,16 @@ def _validate_invoice_line_relationships(invoice: ClientInvoice, payload: dict[s
     account = payload["revenue_account"]
     if account.company_id != invoice.company_id:
         raise ValidationError({"revenue_account": "Account belongs to another company."})
+    if account.account_type != AccountType.REVENUE:
+        raise ValidationError(
+            {"revenue_account": "Revenue account must be an active revenue account."}
+        )
+    if not account.is_active:
+        raise ValidationError(
+            {"revenue_account": "Revenue account must be an active revenue account."}
+        )
+    if not account.allow_posting:
+        raise ValidationError({"revenue_account": "Revenue account does not allow posting."})
     cost_center = payload.get("cost_center")
     if cost_center and cost_center.company_id != invoice.company_id:
         raise ValidationError({"cost_center": "Cost centre belongs to another company."})

@@ -145,6 +145,20 @@ class InvoiceDraftUpdateSerializer(serializers.ModelSerializer[ClientInvoice]):
         )
 
 
+class InvoiceRevenueAccountSerializer(serializers.ModelSerializer[Account]):
+    """Minimal, selection-only projection of Account for Invoice line entry.
+
+    Deliberately excludes hierarchy/administration fields (parent,
+    description, is_control_account, sort_order) that belong to chart-of-
+    accounts management, not Invoice line authoring.
+    """
+
+    class Meta:
+        model = Account
+        fields = ("id", "company", "code", "name", "account_type")
+        read_only_fields = fields
+
+
 class ReceiptSerializer(serializers.ModelSerializer[ClientReceipt]):
     allocated_amount = serializers.SerializerMethodField()
 

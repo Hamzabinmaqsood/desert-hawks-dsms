@@ -8,9 +8,14 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
-from rest_framework import decorators, permissions, response, serializers, status, viewsets
+from rest_framework import decorators, mixins, permissions, response, serializers, status, viewsets
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.permissions import BasePermission
+from rest_framework.request import Request
+from rest_framework.views import APIView
 
+from dsms.finance.enums import AccountType
+from dsms.finance.models import Account
 from dsms.finance.services import next_document_number
 from dsms.identity import access
 from dsms.identity.models import User
@@ -58,9 +63,43 @@ from .serializers import (
     InvoiceLineSerializer,
     InvoiceLineWriteSerializer,
     InvoiceReadSerializer,
+    InvoiceRevenueAccountSerializer,
     ReceiptSerializer,
     TaxCodeSerializer,
 )
+
+# Either permission reflects legitimate authorship of an Invoice line and is
+# sufficient to read Invoice revenue-account reference data. Neither implies
+# chart-of-accounts management authority (`finance.manage_chart_of_accounts`),
+# which stays exclusive to Finance roles.
+INVOICE_REVENUE_ACCOUNT_PERMISSIONS = (
+    "billing.add_clientinvoice",
+    "billing.change_clientinvoice",
+)
+
+
+class InvoiceReferencePermission(BasePermission):
+    def has_permission(self, request: Request, view: APIView) -> bool:
+        user = cast(User, request.user)
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        granted = access.get_effective_permissions(user)
+        return bool(granted.intersection(INVOICE_REVENUE_ACCOUNT_PERMISSIONS))
+
+
+def _field_errors(exc: DjangoValidationError) -> serializers.ValidationError:
+    """Preserve the service layer's field mapping (e.g. ``revenue_account``).
+
+    Django raises ``ValidationError({"field": "message"})`` from the Billing
+    service layer; flattening to ``exc.messages`` would drop the field name and
+    strand an otherwise actionable message in ``non_field_errors``.
+    """
+
+    return serializers.ValidationError(
+        exc.message_dict if hasattr(exc, "message_dict") else exc.messages
+    )
 
 
 class NoDeleteViewSet(viewsets.ModelViewSet[Any]):
@@ -171,9 +210,7 @@ class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
         try:
             item = create_invoice(profile=profile, actor=request.user, lines=lines, **data)
         except DjangoValidationError as exc:
-            raise serializers.ValidationError(
-                exc.message_dict if hasattr(exc, "message_dict") else exc.messages
-            ) from exc
+            raise _field_errors(exc) from exc
         return response.Response(InvoiceReadSerializer(item).data, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request: Any, *args: Any, **kwargs: Any) -> response.Response:
@@ -198,7 +235,7 @@ class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
                 invoice=invoice, actor=request.user, values=writer.validated_data
             )
         except DjangoValidationError as exc:
-            raise serializers.ValidationError(exc.messages) from exc
+            raise _field_errors(exc) from exc
         return response.Response(InvoiceLineSerializer(line).data, status=status.HTTP_201_CREATED)
 
     @decorators.action(
@@ -217,7 +254,7 @@ class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
                 invoice=invoice, line=line, actor=request.user, values=writer.validated_data
             )
         except DjangoValidationError as exc:
-            raise serializers.ValidationError(exc.messages) from exc
+            raise _field_errors(exc) from exc
         return response.Response(InvoiceLineSerializer(line).data)
 
     def _run(self, function: Callable[..., ClientInvoice]) -> response.Response:
@@ -253,6 +290,33 @@ class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
             filename=f"invoice-{document.invoice.invoice_number}.pdf",
             content_type="application/pdf",
         )
+
+
+class InvoiceRevenueAccountViewSet(mixins.ListModelMixin, viewsets.GenericViewSet[Account]):
+    """Read-only, Invoice-scoped revenue-account selection for line entry.
+
+    Deliberately does not reuse `finance.AccountViewSet`, which gates even
+    reads behind `finance.manage_chart_of_accounts` (chart-management
+    authority). An Invoice maker/editor should not need that authority just
+    to pick a revenue account for a line, so this view is gated by the same
+    permissions that already govern Invoice line authorship and returns only
+    accounts eligible for revenue posting.
+    """
+
+    serializer_class = InvoiceRevenueAccountSerializer
+    permission_classes = [permissions.IsAuthenticated, InvoiceReferencePermission]
+
+    def get_queryset(self) -> Any:
+        user = cast(User, self.request.user)
+        ids: set[Any] = set()
+        for permission in INVOICE_REVENUE_ACCOUNT_PERMISSIONS:
+            ids |= access.get_fully_accessible_company_ids(user, permission=permission)
+        return Account.objects.filter(
+            company_id__in=ids,
+            account_type=AccountType.REVENUE,
+            is_active=True,
+            allow_posting=True,
+        ).order_by("company_id", "code")
 
 
 class ReceiptViewSet(NoDeleteViewSet):
