@@ -121,5 +121,19 @@ describe("authentication components", () => {
     expect(screen.getByText("Test Employee")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();
     expect(screen.getByText("Protected content")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Invoices" })).toBeNull();
+  });
+
+  it("shows Invoice navigation only with Invoice view permission", () => {
+    render(
+      <AppShell
+        session={{ ...session, permissions: ["billing.view_clientinvoice"] }}
+      >
+        <p>Protected content</p>
+      </AppShell>,
+    );
+    expect(
+      screen.getByRole("link", { name: "Invoices" }).getAttribute("href"),
+    ).toBe("/invoices");
   });
 });

@@ -13,6 +13,11 @@ interface NavigationItem {
 
 const navigation: NavigationItem[] = [
   { label: "Dashboard", href: "/dashboard" },
+  {
+    label: "Invoices",
+    href: "/invoices",
+    permissions: ["billing.view_clientinvoice"],
+  },
 ];
 
 export function Sidebar({
@@ -44,7 +49,9 @@ export function Sidebar({
           {visible.map((item) => (
             <li key={item.href}>
               <Link
-                aria-current={pathname === item.href ? "page" : undefined}
+                aria-current={
+                  pathname.startsWith(item.href) ? "page" : undefined
+                }
                 href={item.href}
               >
                 {item.label}

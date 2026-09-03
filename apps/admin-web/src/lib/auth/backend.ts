@@ -40,8 +40,12 @@ export async function backendRequest<T>(
 }
 
 export async function backendDownload(path: string, accessToken: string) {
-  return fetch(new URL(path.replace(/^\//, ""), backendBaseUrl()), {
-    cache: "no-store",
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  try {
+    return await fetch(new URL(path.replace(/^\//, ""), backendBaseUrl()), {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch {
+    return new Response(null, { status: 503 });
+  }
 }

@@ -3,7 +3,11 @@ import "server-only";
 import type { ReadonlyRequestCookies } from "next/dist/server/web/spec-extension/adapters/request-cookies";
 import type { ResponseCookies } from "next/dist/compiled/@edge-runtime/cookies";
 
-import { backendRequest, type BackendResult } from "@/lib/auth/backend";
+import {
+  backendDownload,
+  backendRequest,
+  type BackendResult,
+} from "@/lib/auth/backend";
 import {
   ACCESS_COOKIE,
   clearSessionCookies,
@@ -146,4 +150,28 @@ export async function authenticatedBackendRequest<T>(
   const retried = await send(tokens.access);
   if (retried.status === 401) clearSessionCookies(writer);
   return retried;
+}
+
+export async function authenticatedBackendDownload(
+  reader: CookieReader,
+  writer: ResponseCookies,
+  path: string,
+) {
+  const access = reader.get(ACCESS_COOKIE)?.value;
+  const refresh = reader.get(REFRESH_COOKIE)?.value;
+  if (!access || !refresh) return null;
+  let result = await backendDownload(path, access);
+  if (result.status !== 401) return result;
+  const tokens = await refreshTokens(refresh);
+  if (!tokens) {
+    clearSessionCookies(writer);
+    return null;
+  }
+  setSessionCookies(writer, {
+    access: tokens.access,
+    refresh: tokens.refresh ?? refresh,
+  });
+  result = await backendDownload(path, tokens.access);
+  if (result.status === 401) clearSessionCookies(writer);
+  return result;
 }
