@@ -145,18 +145,25 @@ a:focus-visible {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.brand-mark {
-  align-items: center;
-  background: var(--accent);
-  border-radius: 0.5rem;
-  color: #26351c;
-  display: flex;
-  height: 2.5rem;
-  justify-content: center;
-  width: 2.5rem;
+.brand-logo {
+  display: block;
+  flex: 0 0 auto;
+  height: auto;
+  object-fit: contain;
+}
+.brand-logo-shell {
+  max-height: 3.5rem;
+  width: 3.35rem;
+}
+.brand-logo-login {
+  max-height: 6.5rem;
+  width: 6.25rem;
 }
 .brand-login small {
   color: var(--muted);
+}
+.brand-login {
+  align-items: center;
 }
 .app-shell {
   display: grid;

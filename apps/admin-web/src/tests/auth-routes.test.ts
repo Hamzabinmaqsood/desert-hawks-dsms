@@ -5,6 +5,7 @@ import { POST as login } from "@/app/api/auth/login/route";
 import { POST as logout } from "@/app/api/auth/logout/route";
 import { GET as session } from "@/app/api/auth/session/route";
 import { ACCESS_COOKIE, REFRESH_COOKIE } from "@/lib/auth/cookies";
+import { proxy } from "@/proxy";
 
 const user = {
   id: "user-1",
@@ -64,6 +65,15 @@ describe("authentication BFF routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("BACKEND_API_URL", "http://backend.test/api/v1");
+  });
+
+  it("serves public brand assets without an authenticated session lookup", async () => {
+    const backend = vi.fn();
+    vi.stubGlobal("fetch", backend);
+    const response = await proxy(request("/brand/desert-hawks-logo.png"));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+    expect(backend).not.toHaveBeenCalled();
   });
 
   it("logs in with secure server-owned cookies and returns no tokens", async () => {

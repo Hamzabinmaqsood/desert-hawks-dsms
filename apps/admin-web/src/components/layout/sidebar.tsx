@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { BrandLogo } from "@/components/brand/brand-logo";
 import { canAny } from "@/lib/auth/permissions";
 
 interface NavigationItem {
@@ -35,13 +36,11 @@ export function Sidebar({
   return (
     <aside className="sidebar" aria-label="Primary navigation">
       <div className="brand">
-        <span className="brand-mark" aria-hidden="true">
-          DH
-        </span>
+        <BrandLogo className="brand-logo-shell" />
         <span>
           Desert Hawks
           <br />
-          <small>DSMS Admin</small>
+          <small>Digital Transformation System</small>
         </span>
       </div>
       <nav>

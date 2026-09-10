@@ -8,6 +8,8 @@ function copyCookies(from: NextResponse, to: NextResponse) {
 }
 
 export async function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/brand/"))
+    return NextResponse.next();
   const isLogin = request.nextUrl.pathname === "/login";
   const hasSession =
     request.cookies.has(ACCESS_COOKIE) && request.cookies.has(REFRESH_COOKIE);
@@ -40,5 +42,8 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/login", "/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/login",
+    "/((?!api|brand|_next/static|_next/image|favicon.ico).*)",
+  ],
 };

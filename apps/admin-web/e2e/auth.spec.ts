@@ -17,12 +17,18 @@ test("employee signs in, uses the protected shell, and signs out", async ({
 }) => {
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/login$/);
+  await expect(
+    page.getByRole("img", { name: "Desert Hawks official logo" }),
+  ).toBeVisible();
 
   await page.getByLabel("Work email").fill("employee@example.test");
   await page.getByLabel("Password").fill(randomUUID());
   await page.getByRole("button", { name: "Sign in" }).click();
 
   await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(
+    page.getByRole("img", { name: "Desert Hawks official logo" }),
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Welcome, Test" }),
   ).toBeVisible();

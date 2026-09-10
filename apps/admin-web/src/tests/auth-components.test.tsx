@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LoginForm } from "@/components/auth/login-form";
 import { AppShell } from "@/components/layout/app-shell";
+import LoginPage from "@/app/(auth)/login/page";
 import type { SessionData } from "@/lib/auth/types";
 
 const replace = vi.fn();
@@ -48,6 +49,19 @@ const session: SessionData = {
 describe("authentication components", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => cleanup());
+
+  it("renders the official logo and product identity on the login page", () => {
+    render(<LoginPage />);
+    const logo = screen.getByRole("img", {
+      name: "Desert Hawks official logo",
+    });
+    expect(
+      new URL(logo.getAttribute("src")!, "http://admin.test").searchParams.get(
+        "url",
+      ),
+    ).toBe("/brand/desert-hawks-logo.png");
+    expect(screen.getByText("Digital Transformation System")).toBeTruthy();
+  });
 
   it("renders an accessible login form and disables it while submitting", async () => {
     let finish: ((value: Response) => void) | undefined;
@@ -121,6 +135,14 @@ describe("authentication components", () => {
     expect(screen.getByText("Test Employee")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();
     expect(screen.getByText("Protected content")).toBeTruthy();
+    const logo = screen.getByRole("img", {
+      name: "Desert Hawks official logo",
+    });
+    expect(
+      new URL(logo.getAttribute("src")!, "http://admin.test").searchParams.get(
+        "url",
+      ),
+    ).toBe("/brand/desert-hawks-logo.png");
     expect(screen.queryByRole("link", { name: "Invoices" })).toBeNull();
   });
 

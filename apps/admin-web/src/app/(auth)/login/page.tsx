@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { LoginForm } from "@/components/auth/login-form";
+import { BrandLogo } from "@/components/brand/brand-logo";
 
 export const metadata: Metadata = { title: "Sign in | Desert Hawks DSMS" };
 
@@ -9,13 +10,11 @@ export default function LoginPage() {
     <main className="auth-page">
       <section className="login-card" aria-labelledby="login-title">
         <div className="brand brand-login">
-          <span className="brand-mark" aria-hidden="true">
-            DH
-          </span>
+          <BrandLogo className="brand-logo-login" priority />
           <span>
             Desert Hawks
             <br />
-            <small>DSMS Admin</small>
+            <small>Digital Transformation System</small>
           </span>
         </div>
         <h1 id="login-title">Welcome back</h1>
