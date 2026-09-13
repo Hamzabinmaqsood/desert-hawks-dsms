@@ -19,6 +19,11 @@ const navigation: NavigationItem[] = [
     href: "/invoices",
     permissions: ["billing.view_clientinvoice"],
   },
+  {
+    label: "Receipts",
+    href: "/receipts",
+    permissions: ["billing.view_clientreceipt"],
+  },
 ];
 
 export function Sidebar({

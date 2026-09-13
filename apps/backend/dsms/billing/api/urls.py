@@ -10,6 +10,8 @@ from .views import (
     DebitNoteViewSet,
     InvoiceRevenueAccountViewSet,
     InvoiceViewSet,
+    ReceiptBankAccountViewSet,
+    ReceiptClientViewSet,
     ReceiptViewSet,
     TaxCodeViewSet,
 )
@@ -24,6 +26,16 @@ router.register(
     "invoice-reference/revenue-accounts",
     InvoiceRevenueAccountViewSet,
     basename="billing-invoice-revenue-accounts",
+)
+router.register(
+    "receipt-reference/bank-accounts",
+    ReceiptBankAccountViewSet,
+    basename="billing-receipt-bank-accounts",
+)
+router.register(
+    "receipt-reference/clients",
+    ReceiptClientViewSet,
+    basename="billing-receipt-clients",
 )
 router.register("receipts", ReceiptViewSet, basename="billing-receipt")
 router.register("dashboard", DashboardViewSet, basename="billing-dashboard")

@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from dsms.contracts.models import ContractService, SecuritySite, ServiceContract
 from dsms.finance.models import Account, CostCenter
+from dsms.finance.operations_models import BankAccount
 
 from ..enums import InvoiceType
 from ..models import (
@@ -19,6 +20,7 @@ from ..models import (
     ClientInvoice,
     ClientInvoiceLine,
     ClientReceipt,
+    ClientReceiptAllocation,
     TaxCode,
 )
 
@@ -72,6 +74,7 @@ class InvoiceReadSerializer(serializers.ModelSerializer[ClientInvoice]):
     lines = InvoiceLineSerializer(many=True, read_only=True)
     is_overdue = serializers.BooleanField(read_only=True)
     pdf_available = serializers.SerializerMethodField()
+    receipt_allocations = serializers.SerializerMethodField()
 
     class Meta:
         model = ClientInvoice
@@ -82,6 +85,21 @@ class InvoiceReadSerializer(serializers.ModelSerializer[ClientInvoice]):
 
     def get_pdf_available(self, obj: ClientInvoice) -> bool:
         return obj.documents.exists()
+
+    def get_receipt_allocations(self, obj: ClientInvoice) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": item.id,
+                "receipt": item.receipt_id,
+                "receipt_number": item.receipt.receipt_number,
+                "receipt_date": item.receipt.received_at,
+                "payment_method": item.receipt.payment_method,
+                "reference": item.receipt.external_reference or item.receipt.cheque_reference,
+                "amount": item.amount,
+                "allocated_at": item.allocated_at,
+            }
+            for item in obj.allocations.all()
+        ]
 
 
 class InvoiceLineWriteSerializer(serializers.Serializer[dict[str, object]]):
@@ -159,8 +177,34 @@ class InvoiceRevenueAccountSerializer(serializers.ModelSerializer[Account]):
         read_only_fields = fields
 
 
+class ReceiptAllocationSerializer(serializers.ModelSerializer[ClientReceiptAllocation]):
+    invoice_number = serializers.CharField(source="invoice.invoice_number", read_only=True)
+
+    class Meta:
+        model = ClientReceiptAllocation
+        fields = ("id", "invoice", "invoice_number", "amount", "allocated_at")
+        read_only_fields = fields
+
+
+class ReceiptBankAccountSerializer(serializers.ModelSerializer[BankAccount]):
+    class Meta:
+        model = BankAccount
+        fields = ("id", "company", "name", "bank_name", "currency")
+        read_only_fields = fields
+
+
+class ReceiptClientSerializer(serializers.ModelSerializer[ClientBillingProfile]):
+    class Meta:
+        model = ClientBillingProfile
+        fields = ("client", "company", "billing_name", "currency")
+        read_only_fields = fields
+
+
 class ReceiptSerializer(serializers.ModelSerializer[ClientReceipt]):
     allocated_amount = serializers.SerializerMethodField()
+    unallocated_amount = serializers.SerializerMethodField()
+    client_name = serializers.CharField(source="client.legal_name", read_only=True)
+    allocations = ReceiptAllocationSerializer(many=True, read_only=True)
 
     class Meta:
         model = ClientReceipt
@@ -178,6 +222,9 @@ class ReceiptSerializer(serializers.ModelSerializer[ClientReceipt]):
 
     def get_allocated_amount(self, obj: ClientReceipt) -> Decimal:
         return sum((item.amount for item in obj.allocations.all()), ZERO)
+
+    def get_unallocated_amount(self, obj: ClientReceipt) -> Decimal:
+        return obj.amount - self.get_allocated_amount(obj)
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         company = attrs.get("company", getattr(self.instance, "company", None))

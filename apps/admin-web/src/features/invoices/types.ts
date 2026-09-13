@@ -73,6 +73,18 @@ export interface InvoiceDetail {
   is_overdue: boolean;
   pdf_available: boolean;
   lines: InvoiceLine[];
+  receipt_allocations?: InvoiceReceiptAllocation[];
+}
+
+export interface InvoiceReceiptAllocation {
+  id: string;
+  receipt: string;
+  receipt_number: string;
+  receipt_date: string;
+  payment_method: string;
+  reference: string;
+  amount: string;
+  allocated_at: string;
 }
 
 export type InvoiceSummary = InvoiceDetail;

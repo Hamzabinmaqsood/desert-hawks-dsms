@@ -57,6 +57,25 @@ const ACTORS = {
       "billing.download_invoice",
     ],
   },
+  receiptmaker: {
+    id: MAKER_ID,
+    email: "receiptmaker@example.test",
+    first_name: "Receipt",
+    last_name: "Maker",
+    permissions: ["billing.view_clientreceipt", "billing.add_clientreceipt"],
+  },
+  receiptchecker: {
+    id: APPROVER_ID,
+    email: "receiptchecker@example.test",
+    first_name: "Receipt",
+    last_name: "Checker",
+    permissions: [
+      "billing.view_clientreceipt",
+      "billing.confirm_receipt",
+      "billing.allocate_receipt",
+      "billing.view_clientinvoice",
+    ],
+  },
 };
 
 const actorKeyForEmail = (email) => {
@@ -200,7 +219,30 @@ const invoice = {
       created_at: "2026-08-01T09:00:00Z",
     },
   ],
+  receipt_allocations: [],
 };
+
+const RECEIPT_ID = "70000000-0000-0000-0000-000000000001";
+let receipt = null;
+
+function receiptBody() {
+  return {
+    ...receipt,
+    allocated_amount:
+      receipt?.allocations
+        .reduce((sum, item) => sum + Number(item.amount), 0)
+        .toFixed(2) ?? "0.00",
+    unallocated_amount: receipt
+      ? (
+          Number(receipt.amount) -
+          receipt.allocations.reduce(
+            (sum, item) => sum + Number(item.amount),
+            0,
+          )
+        ).toFixed(2)
+      : "0.00",
+  };
+}
 
 createServer(async (request, response) => {
   const path = request.url;
@@ -323,6 +365,124 @@ createServer(async (request, response) => {
       ],
     });
   }
+  if (path === "/api/v1/billing/receipt-reference/clients/")
+    return json(response, 200, {
+      count: 1,
+      next: null,
+      previous: null,
+      results: [
+        {
+          client: invoice.client,
+          company: invoice.company,
+          billing_name: invoice.billing_name_snapshot,
+          currency: "PKR",
+        },
+      ],
+    });
+  if (path === "/api/v1/billing/receipt-reference/bank-accounts/")
+    return json(response, 200, {
+      count: 1,
+      next: null,
+      previous: null,
+      results: [
+        {
+          id: "bank-1",
+          company: invoice.company,
+          name: "Main collections",
+          bank_name: "Test Bank",
+          currency: "PKR",
+        },
+      ],
+    });
+  if (path === "/api/v1/billing/receipts/" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    receipt = {
+      id: RECEIPT_ID,
+      receipt_number: "RCPT-E2E-001",
+      company: body.company,
+      client: body.client,
+      client_name: invoice.billing_name_snapshot,
+      received_at: body.received_at,
+      value_date: body.value_date,
+      currency: body.currency,
+      amount: body.amount,
+      payment_method: body.payment_method,
+      bank_account: body.bank_account,
+      cheque_reference: body.cheque_reference ?? "",
+      external_reference: body.external_reference ?? "",
+      status: "DRAFT",
+      notes: body.notes ?? "",
+      allocations: [],
+    };
+    return json(response, 201, receiptBody());
+  }
+  if (
+    path === `/api/v1/billing/receipts/${RECEIPT_ID}/confirm/` &&
+    request.method === "POST"
+  ) {
+    receipt.status = "CONFIRMED";
+    return json(response, 200, receiptBody());
+  }
+  if (path === `/api/v1/billing/receipts/${RECEIPT_ID}/eligible-invoices/`)
+    return json(response, 200, [
+      {
+        id: invoice.id,
+        invoice_number: invoice.invoice_number,
+        invoice_date: invoice.invoice_date,
+        currency: invoice.currency,
+        total_amount: invoice.total_amount,
+        amount_paid: invoice.amount_paid,
+        balance_due: invoice.balance_due,
+        status: invoice.status,
+      },
+    ]);
+  if (
+    path === `/api/v1/billing/receipts/${RECEIPT_ID}/allocate/` &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    const amount = Number(body.amount);
+    receipt.allocations.push({
+      id: "allocation-e2e",
+      invoice: invoice.id,
+      invoice_number: invoice.invoice_number,
+      amount: amount.toFixed(2),
+      allocated_at: new Date().toISOString(),
+    });
+    receipt.status =
+      amount === Number(receipt.amount) ? "ALLOCATED" : "PARTIALLY_ALLOCATED";
+    invoice.amount_paid = amount.toFixed(2);
+    invoice.balance_due = (Number(invoice.total_amount) - amount).toFixed(2);
+    invoice.status = invoice.balance_due === "0.00" ? "PAID" : "PARTIALLY_PAID";
+    invoice.receipt_allocations = [
+      {
+        id: "allocation-e2e",
+        receipt: RECEIPT_ID,
+        receipt_number: receipt.receipt_number,
+        receipt_date: receipt.received_at,
+        payment_method: receipt.payment_method,
+        reference: receipt.external_reference,
+        amount: amount.toFixed(2),
+        allocated_at: new Date().toISOString(),
+      },
+    ];
+    return json(response, 201, {
+      id: "allocation-e2e",
+      amount: amount.toFixed(2),
+    });
+  }
+  if (path === `/api/v1/billing/receipts/${RECEIPT_ID}/`)
+    return json(response, 200, receiptBody());
+  if (
+    path === "/api/v1/billing/receipts/" ||
+    path?.startsWith("/api/v1/billing/receipts/?")
+  )
+    return json(response, 200, {
+      count: receipt ? 1 : 0,
+      next: null,
+      previous: null,
+      results: receipt ? [receiptBody()] : [],
+    });
   if (path === "/api/v1/billing/invoices/" && request.method === "POST") {
     const body = await readJsonBody(request);
     draft = {

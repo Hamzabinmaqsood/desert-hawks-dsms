@@ -642,8 +642,12 @@ def allocate_receipt(
         raise ValidationError("Receipt is not available for allocation.")
     if locked_receipt.client_id != locked_invoice.client_id:
         raise ValidationError("Receipt and invoice belong to different clients.")
+    if locked_receipt.company_id != locked_invoice.company_id:
+        raise ValidationError("Receipt and invoice belong to different companies.")
     if locked_receipt.currency != locked_invoice.currency:
         raise ValidationError("Receipt and invoice currencies differ.")
+    if locked_invoice.status not in {InvoiceStatus.ISSUED, InvoiceStatus.PARTIALLY_PAID}:
+        raise ValidationError("Invoice is not available for receipt allocation.")
     if amount <= 0 or amount > locked_invoice.balance_due:
         raise ValidationError("Allocation exceeds the invoice balance or is invalid.")
     allocated = locked_receipt.allocations.aggregate(total=Sum("amount"))["total"] or ZERO

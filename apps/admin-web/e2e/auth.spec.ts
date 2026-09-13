@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 
 const DRAFT_INVOICE_ID = "90000000-0000-0000-0000-000000000001";
+const ISSUED_INVOICE_ID = "10000000-0000-0000-0000-000000000001";
 
 async function signIn(page: Page, email: string) {
   await page.goto("/login");
@@ -180,4 +181,47 @@ test("a maker submits a draft and a separate approver approves, issues and downl
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download PDF" }).click();
   expect((await download).suggestedFilename()).toBe("INV-E2E-DRAFT-001.pdf");
+});
+
+test("receipt maker and checker record, confirm and allocate a client payment", async ({
+  page,
+}) => {
+  await signIn(page, "receiptmaker@example.test");
+  await expect(page.getByRole("link", { name: "Receipts" })).toBeVisible();
+  await page.getByRole("link", { name: "Receipts" }).click();
+  await page.getByRole("link", { name: "New Receipt" }).click();
+  await page
+    .getByLabel("Client")
+    .selectOption({ label: "E2E Security Client (PKR)" });
+  await page.getByLabel("Received at").fill("2026-09-10T10:00");
+  await page.getByLabel("Value date").fill("2026-09-10");
+  await page.getByLabel("Amount").fill("7000.00");
+  await page.getByLabel("Payment method").selectOption("BANK_TRANSFER");
+  await page.getByLabel("Receiving bank account").selectOption("bank-1");
+  await page.getByLabel("External reference").fill("BANK-E2E-9");
+  await page.getByRole("button", { name: "Create draft" }).click();
+  await expect(page.getByRole("heading", { name: "RCPT-E2E-001" })).toBeVisible(
+    { timeout: 15_000 },
+  );
+  await expect(
+    page.getByRole("button", { name: "Confirm receipt" }),
+  ).toBeHidden();
+  await page.getByRole("button", { name: "Sign out" }).click();
+
+  await signIn(page, "receiptchecker@example.test");
+  const sessionResponse = await page.request.get("/api/auth/session");
+  expect(sessionResponse.ok()).toBeTruthy();
+  expect((await sessionResponse.json()).permissions).not.toContain(
+    "finance.manage_chart_of_accounts",
+  );
+  await page.goto("/receipts/70000000-0000-0000-0000-000000000001");
+  await page.getByRole("button", { name: "Confirm receipt" }).click();
+  await expect(page.getByText("CONFIRMED")).toBeVisible();
+  await page.getByLabel("Eligible invoice").selectOption(ISSUED_INVOICE_ID);
+  await page.getByLabel("Allocation amount").fill("6000.00");
+  await page.getByRole("button", { name: "Allocate payment" }).click();
+  await expect(page.getByText(/PKR.*1,000.00/)).toBeVisible();
+  await page.getByRole("link", { name: "INV-E2E-001" }).click();
+  await expect(page.getByText(/PKR.*6,000.00/).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "RCPT-E2E-001" })).toBeVisible();
 });

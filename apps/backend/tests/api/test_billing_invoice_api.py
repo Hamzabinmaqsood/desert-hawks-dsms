@@ -257,6 +257,62 @@ def test_allocation_locks_preserve_receipt_and_invoice_budgets() -> None:
     assert sum(receipt.allocations.values_list("amount", flat=True), Decimal("0")) == Decimal("70")
 
 
+def test_receipt_reference_and_payment_visibility_contract() -> None:
+    graph = billing_graph()
+    invoice = issue_invoice(
+        invoice=approve_invoice(
+            invoice=submit_invoice(invoice=make_invoice(graph, "100")), actor=graph["checker"]
+        ),
+        actor=graph["checker"],
+    )
+    receipt = ClientReceipt.objects.create(
+        receipt_number="RCPT-VISIBILITY",
+        company=graph["company"],
+        client=graph["client"],
+        received_at="2026-08-02T10:00:00Z",
+        currency="PKR",
+        amount=Decimal("70"),
+        payment_method=PaymentMethod.BANK_TRANSFER,
+        external_reference="BANK-9",
+        received_by=graph["maker"],
+        bank_account=graph["bank"],
+        status="CONFIRMED",
+    )
+    clerk = UserFactory.create()
+    grant(
+        clerk,
+        graph["company"],
+        "add_clientreceipt",
+        "view_clientreceipt",
+        "allocate_receipt",
+        "view_clientinvoice",
+    )
+    client = authenticated(clerk)
+    clients = client.get("/api/v1/billing/receipt-reference/clients/")
+    assert clients.status_code == 200
+    assert set(clients.data["results"][0]) == {"client", "company", "billing_name", "currency"}
+    banks = client.get("/api/v1/billing/receipt-reference/bank-accounts/")
+    assert banks.status_code == 200
+    assert set(banks.data["results"][0]) == {"id", "company", "name", "bank_name", "currency"}
+    eligible = client.get(f"/api/v1/billing/receipts/{receipt.id}/eligible-invoices/")
+    assert eligible.status_code == 200
+    assert eligible.data[0]["id"] == invoice.id
+    allocated = client.post(
+        f"/api/v1/billing/receipts/{receipt.id}/allocate/",
+        {"invoice": invoice.id, "amount": "60.00"},
+        format="json",
+    )
+    assert allocated.status_code == 201
+    receipt_detail = client.get(f"/api/v1/billing/receipts/{receipt.id}/")
+    assert receipt_detail.data["allocated_amount"] == Decimal("60.00")
+    assert receipt_detail.data["unallocated_amount"] == Decimal("10.00")
+    assert receipt_detail.data["allocations"][0]["invoice_number"] == invoice.invoice_number
+    invoice_detail = client.get(f"/api/v1/billing/invoices/{invoice.id}/")
+    assert invoice_detail.data["amount_paid"] == "60.00"
+    assert invoice_detail.data["balance_due"] == "149.00"
+    assert invoice_detail.data["receipt_allocations"][0]["receipt_number"] == receipt.receipt_number
+
+
 @pytest.mark.django_db(transaction=True)
 def test_postgresql_concurrent_allocations_preserve_both_budgets() -> None:
     graph = billing_graph()

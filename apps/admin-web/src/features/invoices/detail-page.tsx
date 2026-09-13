@@ -140,6 +140,41 @@ export function InvoiceDetailPage({ id }: { id: string }) {
           </dl>
         </InvoiceDetailSection>
       </div>
+      <InvoiceDetailSection title="Receipt allocations">
+        {invoice.receipt_allocations?.length ? (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Receipt</th>
+                  <th>Receipt date</th>
+                  <th>Method / reference</th>
+                  <th>Allocated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoice.receipt_allocations.map((allocation) => (
+                  <tr key={allocation.id}>
+                    <td>
+                      <Link href={`/receipts/${allocation.receipt}`}>
+                        {allocation.receipt_number}
+                      </Link>
+                    </td>
+                    <td>{formatDate(allocation.receipt_date)}</td>
+                    <td>
+                      {allocation.payment_method.replaceAll("_", " ")}
+                      {allocation.reference ? ` · ${allocation.reference}` : ""}
+                    </td>
+                    <td>{formatMoney(allocation.amount, invoice.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p>No receipt allocations are recorded.</p>
+        )}
+      </InvoiceDetailSection>
       <InvoiceDetailSection title="Lifecycle">
         <Lifecycle invoice={invoice} />
       </InvoiceDetailSection>

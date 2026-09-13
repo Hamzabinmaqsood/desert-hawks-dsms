@@ -286,6 +286,15 @@ def test_receipt_allocation_rejects_client_currency_and_available_balance_mismat
             receipt=receipt, invoice=invoice, amount=Decimal("10"), actor=graph["checker"]
         )
 
+    receipt.currency = invoice.currency
+    receipt.save(update_fields=["currency"])
+    invoice.status = InvoiceStatus.DRAFT
+    invoice.save(update_fields=["status"])
+    with pytest.raises(ValidationError, match="not available"):
+        allocate_receipt(
+            receipt=receipt, invoice=invoice, amount=Decimal("10"), actor=graph["checker"]
+        )
+
 
 def test_billing_balances_ageing_and_statement_are_derived_from_ledger() -> None:
     graph = billing_graph()

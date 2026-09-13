@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 
 from dsms.finance.enums import AccountType
 from dsms.finance.models import Account
+from dsms.finance.operations_models import BankAccount
 from dsms.finance.services import next_document_number
 from dsms.identity import access
 from dsms.identity.models import User
@@ -64,6 +65,8 @@ from .serializers import (
     InvoiceLineWriteSerializer,
     InvoiceReadSerializer,
     InvoiceRevenueAccountSerializer,
+    ReceiptBankAccountSerializer,
+    ReceiptClientSerializer,
     ReceiptSerializer,
     TaxCodeSerializer,
 )
@@ -76,6 +79,10 @@ INVOICE_REVENUE_ACCOUNT_PERMISSIONS = (
     "billing.add_clientinvoice",
     "billing.change_clientinvoice",
 )
+RECEIPT_REFERENCE_PERMISSIONS = (
+    "billing.add_clientreceipt",
+    "billing.confirm_receipt",
+)
 
 
 class InvoiceReferencePermission(BasePermission):
@@ -87,6 +94,17 @@ class InvoiceReferencePermission(BasePermission):
             return True
         granted = access.get_effective_permissions(user)
         return bool(granted.intersection(INVOICE_REVENUE_ACCOUNT_PERMISSIONS))
+
+
+class ReceiptReferencePermission(BasePermission):
+    def has_permission(self, request: Request, view: APIView) -> bool:
+        user = cast(User, request.user)
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        granted = access.get_effective_permissions(user)
+        return bool(granted.intersection(RECEIPT_REFERENCE_PERMISSIONS))
 
 
 def _field_errors(exc: DjangoValidationError) -> serializers.ValidationError:
@@ -180,7 +198,7 @@ class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
     def get_queryset(self) -> Any:
         queryset = ClientInvoice.objects.select_related(
             "company", "client", "contract"
-        ).prefetch_related("lines")
+        ).prefetch_related("lines", "allocations__receipt")
         ids = access.get_fully_accessible_company_ids(
             cast(User, self.request.user), permission=self._permission()
         )
@@ -319,14 +337,56 @@ class InvoiceRevenueAccountViewSet(mixins.ListModelMixin, viewsets.GenericViewSe
         ).order_by("company_id", "code")
 
 
+class ReceiptBankAccountViewSet(mixins.ListModelMixin, viewsets.GenericViewSet[BankAccount]):
+    """Minimal receiving-account selector for Receipt authors and confirmers."""
+
+    serializer_class = ReceiptBankAccountSerializer
+    permission_classes = [permissions.IsAuthenticated, ReceiptReferencePermission]
+    filterset_fields = ["company", "currency"]
+
+    def get_queryset(self) -> Any:
+        user = cast(User, self.request.user)
+        ids: set[Any] = set()
+        for permission in RECEIPT_REFERENCE_PERMISSIONS:
+            ids |= access.get_fully_accessible_company_ids(user, permission=permission)
+        return BankAccount.objects.filter(company_id__in=ids, is_active=True).order_by(
+            "company_id", "name"
+        )
+
+
+class ReceiptClientViewSet(mixins.ListModelMixin, viewsets.GenericViewSet[ClientBillingProfile]):
+    """Minimal client/currency projection for Receipt authors."""
+
+    serializer_class = ReceiptClientSerializer
+    permission_classes = [permissions.IsAuthenticated, ReceiptReferencePermission]
+    filterset_fields = ["company", "is_active"]
+
+    def get_queryset(self) -> Any:
+        user = cast(User, self.request.user)
+        ids: set[Any] = set()
+        for permission in RECEIPT_REFERENCE_PERMISSIONS:
+            ids |= access.get_fully_accessible_company_ids(user, permission=permission)
+        return ClientBillingProfile.objects.filter(company_id__in=ids, is_active=True).order_by(
+            "company_id", "billing_name"
+        )
+
+
 class ReceiptViewSet(NoDeleteViewSet):
     serializer_class = ReceiptSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
     filterset_fields = ["company", "client", "status", "payment_method"]
+    search_fields = [
+        "receipt_number",
+        "external_reference",
+        "cheque_reference",
+        "client__legal_name",
+    ]
+    ordering_fields = ["received_at", "amount", "created_at"]
     custom_action_permissions = {
         "confirm": "billing.confirm_receipt",
         "allocate": "billing.allocate_receipt",
         "reverse": "billing.reverse_receipt",
+        "eligible_invoices": "billing.allocate_receipt",
     }
 
     def _permission(self) -> str:
@@ -342,7 +402,7 @@ class ReceiptViewSet(NoDeleteViewSet):
     def get_queryset(self) -> Any:
         queryset = ClientReceipt.objects.select_related(
             "company", "client", "received_by"
-        ).prefetch_related("allocations")
+        ).prefetch_related("allocations__invoice")
         ids = access.get_fully_accessible_company_ids(
             cast(User, self.request.user), permission=self._permission()
         )
@@ -396,6 +456,32 @@ class ReceiptViewSet(NoDeleteViewSet):
             return response.Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
         return response.Response(
             {"id": allocation.pk, "amount": allocation.amount}, status=status.HTTP_201_CREATED
+        )
+
+    @decorators.action(detail=True, methods=["get"], url_path="eligible-invoices")
+    def eligible_invoices(self, request: Any, pk: Any = None) -> response.Response:
+        receipt = self.get_object()
+        invoices = ClientInvoice.objects.filter(
+            company=receipt.company,
+            client=receipt.client,
+            currency=receipt.currency,
+            status__in=["ISSUED", "PARTIALLY_PAID"],
+            balance_due__gt=0,
+        ).order_by("due_date", "invoice_number")
+        return response.Response(
+            [
+                {
+                    "id": item.id,
+                    "invoice_number": item.invoice_number,
+                    "invoice_date": item.invoice_date,
+                    "currency": item.currency,
+                    "total_amount": item.total_amount,
+                    "amount_paid": item.amount_paid,
+                    "balance_due": item.balance_due,
+                    "status": item.status,
+                }
+                for item in invoices
+            ]
         )
 
     @decorators.action(detail=True, methods=["post"])

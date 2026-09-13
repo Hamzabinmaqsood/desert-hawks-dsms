@@ -78,6 +78,18 @@ export const invoice: InvoiceDetail = {
       created_at: "2026-08-01T09:00:00Z",
     },
   ],
+  receipt_allocations: [
+    {
+      id: "allocation-1",
+      receipt: "receipt-1",
+      receipt_number: "RCPT-2026-001",
+      receipt_date: "2026-08-05T10:00:00Z",
+      payment_method: "BANK_TRANSFER",
+      reference: "BANK-9",
+      amount: "2000.00",
+      allocated_at: "2026-08-05T10:05:00Z",
+    },
+  ],
 };
 
 const baseSession: SessionData = {
@@ -230,6 +242,9 @@ describe("invoice screens", () => {
     ).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Lifecycle" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Download PDF" })).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "RCPT-2026-001" }).getAttribute("href"),
+    ).toBe("/receipts/receipt-1");
   });
 
   it("hides unavailable or unauthorized PDFs and normalizes not found", async () => {

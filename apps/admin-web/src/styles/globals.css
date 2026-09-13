@@ -484,3 +484,18 @@ a:focus-visible {
 .line-form {
   margin-top: 0.5rem;
 }
+.allocation-form {
+  align-items: end;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(14rem, 2fr) minmax(10rem, 1fr) auto;
+}
+.allocation-form .form-hint,
+.allocation-form .form-error {
+  grid-column: 1 / -1;
+}
+@media (max-width: 720px) {
+  .allocation-form {
+    grid-template-columns: 1fr;
+  }
+}
