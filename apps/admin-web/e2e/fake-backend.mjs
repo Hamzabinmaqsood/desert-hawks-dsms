@@ -372,9 +372,9 @@ createServer(async (request, response) => {
       previous: null,
       results: [
         {
-          client: invoice.client,
-          company: invoice.company,
-          billing_name: invoice.billing_name_snapshot,
+          client: draft.client,
+          company: draft.company,
+          billing_name: draft.billing_name_snapshot,
           currency: "PKR",
         },
       ],
@@ -424,50 +424,61 @@ createServer(async (request, response) => {
     return json(response, 200, receiptBody());
   }
   if (path === `/api/v1/billing/receipts/${RECEIPT_ID}/eligible-invoices/`)
-    return json(response, 200, [
-      {
-        id: invoice.id,
-        invoice_number: invoice.invoice_number,
-        invoice_date: invoice.invoice_date,
-        currency: invoice.currency,
-        total_amount: invoice.total_amount,
-        amount_paid: invoice.amount_paid,
-        balance_due: invoice.balance_due,
-        status: invoice.status,
-      },
-    ]);
+    return json(
+      response,
+      200,
+      draft.balance_due !== "0.00"
+        ? [
+            {
+              id: draft.id,
+              invoice_number: draft.invoice_number,
+              invoice_date: draft.invoice_date,
+              currency: draft.currency,
+              total_amount: draft.total_amount,
+              amount_paid: draft.amount_paid,
+              balance_due: draft.balance_due,
+              status: draft.status,
+            },
+          ]
+        : [],
+    );
   if (
     path === `/api/v1/billing/receipts/${RECEIPT_ID}/allocate/` &&
     request.method === "POST"
   ) {
     const body = await readJsonBody(request);
     const amount = Number(body.amount);
+    const allocationId = `allocation-e2e-${receipt.allocations.length + 1}`;
     receipt.allocations.push({
-      id: "allocation-e2e",
-      invoice: invoice.id,
-      invoice_number: invoice.invoice_number,
+      id: allocationId,
+      invoice: draft.id,
+      invoice_number: draft.invoice_number,
       amount: amount.toFixed(2),
       allocated_at: new Date().toISOString(),
     });
+    const allocated = receipt.allocations.reduce(
+      (sum, allocation) => sum + Number(allocation.amount),
+      0,
+    );
     receipt.status =
-      amount === Number(receipt.amount) ? "ALLOCATED" : "PARTIALLY_ALLOCATED";
-    invoice.amount_paid = amount.toFixed(2);
-    invoice.balance_due = (Number(invoice.total_amount) - amount).toFixed(2);
-    invoice.status = invoice.balance_due === "0.00" ? "PAID" : "PARTIALLY_PAID";
-    invoice.receipt_allocations = [
-      {
-        id: "allocation-e2e",
-        receipt: RECEIPT_ID,
-        receipt_number: receipt.receipt_number,
-        receipt_date: receipt.received_at,
-        payment_method: receipt.payment_method,
-        reference: receipt.external_reference,
-        amount: amount.toFixed(2),
-        allocated_at: new Date().toISOString(),
-      },
-    ];
+      allocated === Number(receipt.amount)
+        ? "ALLOCATED"
+        : "PARTIALLY_ALLOCATED";
+    draft.amount_paid = allocated.toFixed(2);
+    draft.balance_due = (Number(draft.total_amount) - allocated).toFixed(2);
+    draft.status = draft.balance_due === "0.00" ? "PAID" : "PARTIALLY_PAID";
+    draft.receipt_allocations = receipt.allocations.map((allocation) => ({
+      id: allocation.id,
+      receipt: RECEIPT_ID,
+      receipt_number: receipt.receipt_number,
+      receipt_date: receipt.received_at,
+      payment_method: receipt.payment_method,
+      reference: receipt.external_reference,
+      amount: allocation.amount,
+      allocated_at: allocation.allocated_at,
+    }));
     return json(response, 201, {
-      id: "allocation-e2e",
+      id: allocationId,
       amount: amount.toFixed(2),
     });
   }

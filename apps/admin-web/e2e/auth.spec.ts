@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 
 const DRAFT_INVOICE_ID = "90000000-0000-0000-0000-000000000001";
-const ISSUED_INVOICE_ID = "10000000-0000-0000-0000-000000000001";
 
 async function signIn(page: Page, email: string) {
   await page.goto("/login");
@@ -113,9 +112,10 @@ test("a maker creates a draft invoice, adds and edits a line, and sees server to
   await expect(page.getByText("Guard patrol")).toBeVisible();
 });
 
-test("a maker submits a draft and a separate approver approves, issues and downloads it", async ({
+test("least-privilege actors complete the Invoice and Receipt lifecycle", async ({
   page,
 }) => {
+  test.setTimeout(90_000);
   await signIn(page, "maker@example.test");
 
   // Author a fresh draft with one line so the invoice is submittable.
@@ -181,21 +181,18 @@ test("a maker submits a draft and a separate approver approves, issues and downl
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download PDF" }).click();
   expect((await download).suggestedFilename()).toBe("INV-E2E-DRAFT-001.pdf");
-});
 
-test("receipt maker and checker record, confirm and allocate a client payment", async ({
-  page,
-}) => {
+  await page.getByRole("button", { name: "Sign out" }).click();
   await signIn(page, "receiptmaker@example.test");
   await expect(page.getByRole("link", { name: "Receipts" })).toBeVisible();
   await page.getByRole("link", { name: "Receipts" }).click();
   await page.getByRole("link", { name: "New Receipt" }).click();
   await page
     .getByLabel("Client")
-    .selectOption({ label: "E2E Security Client (PKR)" });
+    .selectOption({ label: "E2E Draft Client (PKR)" });
   await page.getByLabel("Received at").fill("2026-09-10T10:00");
   await page.getByLabel("Value date").fill("2026-09-10");
-  await page.getByLabel("Amount").fill("7000.00");
+  await page.getByLabel("Amount").fill("10000.00");
   await page.getByLabel("Payment method").selectOption("BANK_TRANSFER");
   await page.getByLabel("Receiving bank account").selectOption("bank-1");
   await page.getByLabel("External reference").fill("BANK-E2E-9");
@@ -217,11 +214,24 @@ test("receipt maker and checker record, confirm and allocate a client payment", 
   await page.goto("/receipts/70000000-0000-0000-0000-000000000001");
   await page.getByRole("button", { name: "Confirm receipt" }).click();
   await expect(page.getByText("CONFIRMED")).toBeVisible();
-  await page.getByLabel("Eligible invoice").selectOption(ISSUED_INVOICE_ID);
+  await page.getByLabel("Eligible invoice").selectOption(DRAFT_INVOICE_ID);
   await page.getByLabel("Allocation amount").fill("6000.00");
   await page.getByRole("button", { name: "Allocate payment" }).click();
-  await expect(page.getByText(/PKR.*1,000.00/)).toBeVisible();
-  await page.getByRole("link", { name: "INV-E2E-001" }).click();
-  await expect(page.getByText(/PKR.*6,000.00/).first()).toBeVisible();
+  await expect(page.getByText(/^PKR\s+4,000\.00$/).first()).toBeVisible();
+  await page.getByRole("link", { name: "INV-E2E-DRAFT-001" }).click();
+  await expect(page.getByText(/^PKR\s+6,000\.00$/).first()).toBeVisible();
+  await expect(page.getByText(/^PKR\s+4,000\.00$/).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "RCPT-E2E-001" })).toBeVisible();
+
+  await page.getByRole("link", { name: "RCPT-E2E-001" }).click();
+  await page.getByLabel("Eligible invoice").selectOption(DRAFT_INVOICE_ID);
+  await page.getByLabel("Allocation amount").fill("4000.00");
+  await page.getByRole("button", { name: "Allocate payment" }).click();
+  await expect(page.locator(".status-badge")).toHaveText("ALLOCATED");
+  await expect(page.getByText(/^PKR\s+0\.00$/)).toBeVisible();
+  await page.getByRole("link", { name: "INV-E2E-DRAFT-001" }).first().click();
+  await expect(page.getByText("Paid").first()).toBeVisible();
+  await expect(page.getByText(/^PKR\s+10,000\.00$/).first()).toBeVisible();
+  await expect(page.getByText(/^PKR\s+0\.00$/).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "RCPT-E2E-001" })).toHaveCount(2);
 });
