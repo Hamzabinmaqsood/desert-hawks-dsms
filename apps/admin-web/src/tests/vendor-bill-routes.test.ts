@@ -11,6 +11,13 @@ import {
   PATCH as updateLine,
 } from "@/app/api/vendor-bills/[id]/lines/[lineId]/route";
 import { GET as list, POST as create } from "@/app/api/vendor-bills/route";
+import { POST as submit } from "@/app/api/vendor-bills/[id]/submit/route";
+import { POST as reject } from "@/app/api/vendor-bills/[id]/reject/route";
+import {
+  GET as attachments,
+  POST as uploadAttachment,
+} from "@/app/api/vendor-bills/[id]/attachments/route";
+import { GET as downloadAttachment } from "@/app/api/vendor-bills/[id]/attachments/[attachmentId]/download/route";
 import { ACCESS_COOKIE, REFRESH_COOKIE } from "@/lib/auth/cookies";
 
 const json = (body: unknown, status = 200) =>
@@ -38,6 +45,9 @@ function request(
 }
 const context = { params: Promise.resolve({ id: "bill" }) };
 const lineContext = { params: Promise.resolve({ id: "bill", lineId: "line" }) };
+const attachmentContext = {
+  params: Promise.resolve({ id: "bill", attachmentId: "attachment" }),
+};
 
 describe("Vendor Bill BFF routes", () => {
   beforeEach(() => {
@@ -195,5 +205,100 @@ describe("Vendor Bill BFF routes", () => {
     expect(String((backend.mock.calls[3] as unknown as [URL])[0])).toContain(
       "finance/ap-reference/expense-accounts/",
     );
+  });
+  it("sends empty workflow payloads and allowlists only rejection reason", async () => {
+    const backend = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.status).toBeUndefined();
+      expect(body.company).toBeUndefined();
+      expect(body.journal_entry).toBeUndefined();
+      return json({ status: "SUBMITTED" });
+    });
+    vi.stubGlobal("fetch", backend);
+    expect(
+      (
+        await submit(
+          request("/api/vendor-bills/bill/submit", {
+            method: "POST",
+            body: JSON.stringify({
+              status: "POSTED",
+              company: "x",
+              journal_entry: "x",
+            }),
+          }),
+          context,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      JSON.parse(
+        String(
+          (backend.mock.calls[0] as unknown as [unknown, RequestInit])[1].body,
+        ),
+      ),
+    ).toEqual({});
+    await reject(
+      request("/api/vendor-bills/bill/reject", {
+        method: "POST",
+        body: JSON.stringify({
+          reason: "Wrong price",
+          status: "REJECTED",
+          approved_by: "x",
+        }),
+      }),
+      context,
+    );
+    expect(
+      JSON.parse(
+        String(
+          (backend.mock.calls[1] as unknown as [unknown, RequestInit])[1].body,
+        ),
+      ),
+    ).toEqual({ reason: "Wrong price" });
+  });
+  it("allowlists one attachment file and privately proxies downloads", async () => {
+    const backend = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        const data = init.body as FormData;
+        expect([...data.keys()]).toEqual(["file"]);
+      }
+      return new Response(
+        init?.method === "GET" ? "pdf" : JSON.stringify({ id: "a" }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type":
+              init?.method === "GET" ? "application/pdf" : "application/json",
+            "Content-Disposition": "attachment; filename=invoice.pdf",
+          },
+        },
+      );
+    });
+    vi.stubGlobal("fetch", backend);
+    expect(
+      (
+        await attachments(
+          request("/api/vendor-bills/bill/attachments"),
+          context,
+        )
+      ).status,
+    ).toBe(200);
+    const form = new FormData();
+    form.set(
+      "file",
+      new File(["%PDF-1.4"], "invoice.pdf", { type: "application/pdf" }),
+    );
+    form.set("company", "foreign");
+    const multipart = request("/api/vendor-bills/bill/attachments", {
+      method: "POST",
+    });
+    vi.spyOn(multipart, "formData").mockResolvedValue(form);
+    expect((await uploadAttachment(multipart, context)).status).toBe(200);
+    const downloaded = await downloadAttachment(
+      request("/api/vendor-bills/bill/attachments/attachment/download"),
+      attachmentContext,
+    );
+    expect(downloaded.status).toBe(200);
+    expect(downloaded.headers.get("Cache-Control")).toBe("private, no-store");
   });
 });

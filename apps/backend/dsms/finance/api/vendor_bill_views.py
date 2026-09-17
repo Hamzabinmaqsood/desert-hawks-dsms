@@ -1,8 +1,11 @@
 from typing import Any, cast
+from uuid import UUID
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import decorators, permissions, response, serializers, status, viewsets
 from rest_framework.exceptions import MethodNotAllowed, PermissionDenied
 from rest_framework.permissions import BasePermission
@@ -10,8 +13,11 @@ from rest_framework.permissions import BasePermission
 from dsms.identity import access
 from dsms.identity.models import User
 
-from ..enums import WorkflowStatus
+from .. import domain_services
+from ..enums import ApprovalDocumentType, WorkflowStatus
+from ..exceptions import FinanceError, to_error_dict
 from ..models import Account
+from ..operations_models import FinanceAttachment
 from ..procurement_models import VendorBill, VendorBillLine
 from ..vendor_bill_services import (
     ALLOWED_VENDOR_BILL_ACCOUNT_TYPES,
@@ -22,6 +28,7 @@ from ..vendor_bill_services import (
     validate_vendor_bill_header,
 )
 from .vendor_bill_serializers import (
+    VendorBillAttachmentSerializer,
     VendorBillDetailSerializer,
     VendorBillExpenseAccountSerializer,
     VendorBillLineReadSerializer,
@@ -60,6 +67,14 @@ class VendorBillPermission(BasePermission):
                 if request.method == "DELETE"
                 else "finance.change_vendorbillline"
             )
+        elif view.action in {"attachments", "attachment_download"}:
+            code = "finance.manage_finance_attachments"
+        elif view.action == "submit":
+            code = "finance.change_vendorbill"
+        elif view.action in {"approve", "reject"}:
+            code = "finance.approve_finance"
+        elif view.action == "post":
+            code = "finance.post_journal"
         else:
             code = {
                 "create": "finance.add_vendorbill",
@@ -86,6 +101,14 @@ class VendorBillViewSet(viewsets.ModelViewSet[VendorBill]):
                 if self.request.method == "DELETE"
                 else "finance.change_vendorbillline"
             )
+        if self.action in {"attachments", "attachment_download"}:
+            return "finance.manage_finance_attachments"
+        if self.action == "submit":
+            return "finance.change_vendorbill"
+        if self.action in {"approve", "reject"}:
+            return "finance.approve_finance"
+        if self.action == "post":
+            return "finance.post_journal"
         return {
             "create": "finance.add_vendorbill",
             "partial_update": "finance.change_vendorbill",
@@ -190,6 +213,88 @@ class VendorBillViewSet(viewsets.ModelViewSet[VendorBill]):
         except DjangoValidationError as exc:
             raise _errors(exc) from exc
         return response.Response(VendorBillLineReadSerializer(line).data)
+
+    def _workflow_response(self, operation: Any, **kwargs: Any) -> response.Response:
+        try:
+            item = operation(bill=self.get_object(), actor=cast(User, self.request.user), **kwargs)
+        except FinanceError as exc:
+            raise serializers.ValidationError(to_error_dict(exc)) from exc
+        return response.Response(VendorBillDetailSerializer(item).data)
+
+    @decorators.action(detail=True, methods=["post"])
+    def submit(self, request: Any, pk: Any = None) -> response.Response:
+        return self._workflow_response(domain_services.submit_vendor_bill)
+
+    @decorators.action(detail=True, methods=["post"])
+    def approve(self, request: Any, pk: Any = None) -> response.Response:
+        return self._workflow_response(domain_services.approve_vendor_bill)
+
+    @decorators.action(detail=True, methods=["post"])
+    def reject(self, request: Any, pk: Any = None) -> response.Response:
+        return self._workflow_response(
+            domain_services.reject_vendor_bill, reason=str(request.data.get("reason", ""))
+        )
+
+    @decorators.action(detail=True, methods=["post"])
+    def post(self, request: Any, pk: Any = None) -> response.Response:
+        return self._workflow_response(domain_services.post_vendor_bill)
+
+    @decorators.action(detail=True, methods=["get", "post"])
+    def attachments(self, request: Any, pk: Any = None) -> response.Response:
+        bill = self.get_object()
+        items = FinanceAttachment.objects.filter(
+            company=bill.company,
+            document_type=ApprovalDocumentType.VENDOR_BILL,
+            object_id=bill.id,
+        ).order_by("created_at")
+        if request.method == "GET":
+            return response.Response(VendorBillAttachmentSerializer(items, many=True).data)
+        upload = request.FILES.get("file")
+        if upload is None:
+            raise serializers.ValidationError({"file": ["Attachment is required."]})
+        try:
+            item = domain_services.create_finance_attachment(
+                company=bill.company,
+                document_type=ApprovalDocumentType.VENDOR_BILL,
+                object_id=bill.id,
+                upload=upload,
+                actor=cast(User, request.user),
+            )
+        except FinanceError as exc:
+            raise serializers.ValidationError(to_error_dict(exc)) from exc
+        return response.Response(VendorBillAttachmentSerializer(item).data, status=201)
+
+    @extend_schema(parameters=[OpenApiParameter("attachment_id", UUID, OpenApiParameter.PATH)])
+    @decorators.action(
+        detail=True,
+        methods=["get"],
+        url_path=r"attachments/(?P<attachment_id>[^/.]+)/download",
+    )
+    def attachment_download(
+        self, request: Any, pk: Any = None, attachment_id: Any = None
+    ) -> FileResponse:
+        bill = self.get_object()
+        item = get_object_or_404(
+            FinanceAttachment.objects.filter(
+                company=bill.company,
+                document_type=ApprovalDocumentType.VENDOR_BILL,
+                object_id=bill.id,
+            ),
+            pk=attachment_id,
+        )
+        try:
+            private_file = item.file.open("rb")
+        except OSError as exc:
+            raise Http404 from exc
+        result = FileResponse(
+            private_file,
+            as_attachment=True,
+            filename=item.original_filename,
+            content_type=item.content_type,
+        )
+        result["Cache-Control"] = "private, no-store"
+        result["X-Content-Type-Options"] = "nosniff"
+        return result
 
 
 class VendorBillReferencePermission(BasePermission):

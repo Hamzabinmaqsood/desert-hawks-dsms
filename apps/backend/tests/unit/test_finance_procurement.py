@@ -162,6 +162,7 @@ def test_three_way_match_bill_payment_and_outstanding(procurement) -> None:  # t
         expense_account=accounts["expense"],
     )
     bill = domain_services.approve_and_post_vendor_bill(bill=bill, actor=checker)
+    assert bill.status == WorkflowStatus.POSTED
     assert bill.journal_entry and bill.journal_entry.total_debit == bill.journal_entry.total_credit
     voucher = PaymentVoucher.objects.create(
         company=company,

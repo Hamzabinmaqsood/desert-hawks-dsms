@@ -385,8 +385,23 @@ class FinanceActionView(FinanceAPIView):
             "fund-transfers": ApprovalDocumentType.FUND_TRANSFER,
             "budgets": ApprovalDocumentType.BUDGET,
         }
+        result: Any
         try:
-            if action == "submit":
+            if resource == "vendor-bills" and action == "submit":
+                result = domain_services.submit_vendor_bill(
+                    bill=item, actor=cast(User, request.user)
+                )
+            elif resource == "vendor-bills" and action == "approve":
+                result = domain_services.approve_vendor_bill(
+                    bill=item, actor=cast(User, request.user)
+                )
+            elif resource == "vendor-bills" and action == "reject":
+                result = domain_services.reject_vendor_bill(
+                    bill=item,
+                    actor=cast(User, request.user),
+                    reason=str(request.data.get("reason", "")),
+                )
+            elif action == "submit":
                 result = domain_services.submit_finance_document(
                     obj=item,
                     actor=cast(User, request.user),

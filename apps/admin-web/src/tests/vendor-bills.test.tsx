@@ -162,19 +162,22 @@ describe("Vendor Bill screens", () => {
     ).toBeTruthy();
   });
   it("renders draft line controls and hides all editing for a non-draft Bill", async () => {
-    const backend = vi.fn(async (url: RequestInfo | URL) =>
-      String(url).includes("/api/vendors")
-        ? json({ results: [vendor] })
-        : String(url).includes("vendor-bill-accounts")
-          ? json([
-              {
-                id: "a",
-                code: "5000",
-                name: "Supplies",
-                account_type: "EXPENSE",
-              },
-            ])
-          : json(bill),
+    const backend = vi.fn(
+      async (url: RequestInfo | URL, init?: RequestInit) => {
+        void init;
+        return String(url).includes("/api/vendors")
+          ? json({ results: [vendor] })
+          : String(url).includes("vendor-bill-accounts")
+            ? json([
+                {
+                  id: "a",
+                  code: "5000",
+                  name: "Supplies",
+                  account_type: "EXPENSE",
+                },
+              ])
+            : json(bill);
+      },
     );
     vi.stubGlobal("fetch", backend);
     vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -188,11 +191,15 @@ describe("Vendor Bill screens", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save line" }));
     await waitFor(() =>
-      expect(backend.mock.calls.length).toBeGreaterThanOrEqual(4),
+      expect(
+        backend.mock.calls.some(([, init]) => init?.method === "PATCH"),
+      ).toBe(true),
     );
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() =>
-      expect(backend.mock.calls.length).toBeGreaterThanOrEqual(6),
+      expect(
+        backend.mock.calls.some(([, init]) => init?.method === "DELETE"),
+      ).toBe(true),
     );
     cleanup();
     vi.stubGlobal(
@@ -214,5 +221,38 @@ describe("Vendor Bill screens", () => {
     expect(await screen.findByText("SUP-1")).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Edit Vendor Bill" })).toBeNull();
     expect(screen.getByText("Outstanding")).toBeTruthy();
+  });
+  it("confirms submission, refreshes authoritative state, and shows private documents", async () => {
+    const backend = vi.fn(
+      async (url: RequestInfo | URL, init?: RequestInit) => {
+        void init;
+        const path = String(url);
+        if (path.includes("/attachments")) return json([]);
+        if (path.endsWith("/submit"))
+          return json({ ...bill, status: "SUBMITTED" });
+        return json(
+          backend.mock.calls.length > 2
+            ? { ...bill, status: "SUBMITTED" }
+            : bill,
+        );
+      },
+    );
+    vi.stubGlobal("fetch", backend);
+    withAuth(<VendorBillDetailPage id="b" />, [
+      ...permissions,
+      "finance.manage_finance_attachments",
+    ]);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Submit for review" }),
+    );
+    expect(
+      screen.getByText("Submit this Vendor Bill for independent review?"),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm submit for review" }),
+    );
+    await waitFor(() => expect(screen.getByText("SUBMITTED")).toBeTruthy());
+    expect(screen.getByText("Supporting Documents")).toBeTruthy();
+    expect(screen.queryByText(/https?:\/\//)).toBeNull();
   });
 });

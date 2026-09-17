@@ -346,4 +346,43 @@ test("least-privilege Bill author completes draft Vendor Bill authoring", async 
   await expect(page.getByText("SUP-E2E-001")).toBeVisible();
   await expect(page.getByText("2026-10-31")).toBeVisible();
   await expect(page.getByText("120.00").first()).toBeVisible();
+  await page.getByLabel("Supporting document").setInputFiles({
+    name: "supplier-invoice.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4\n%%EOF"),
+  });
+  await expect(
+    page.getByRole("link", { name: "supplier-invoice.pdf" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Submit for review" }).click();
+  await page.getByRole("button", { name: "Confirm submit for review" }).click();
+  await expect(page.getByText("SUBMITTED")).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+
+  await signIn(page, "billchecker@example.test");
+  const checkerSession = await (
+    await page.request.get("/api/auth/session")
+  ).json();
+  expect(checkerSession.permissions).not.toContain(
+    "finance.manage_procurement",
+  );
+  expect(checkerSession.permissions).not.toContain(
+    "finance.manage_chart_of_accounts",
+  );
+  await page.goto(`/vendor-bills/81000000-0000-0000-0000-000000000001`);
+  await page.getByRole("button", { name: "Approve" }).click();
+  await page.getByRole("button", { name: "Confirm approve" }).click();
+  await expect(page.getByText("APPROVED")).toBeVisible();
+  await page.getByRole("button", { name: "Post to accounts payable" }).click();
+  await page
+    .getByRole("button", { name: "Confirm post to accounts payable" })
+    .click();
+  await expect(page.getByText("POSTED")).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Edit Vendor Bill" }),
+  ).toHaveCount(0);
+  const download = await page.request.get(
+    "/api/vendor-bills/81000000-0000-0000-0000-000000000001/attachments/83000000-0000-0000-0000-000000000001/download",
+  );
+  expect(download.status()).toBe(200);
 });

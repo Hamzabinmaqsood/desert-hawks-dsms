@@ -5,10 +5,12 @@ from typing import Any
 
 import pytest
 from django.contrib.auth.models import Permission
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
 from dsms.finance import services
 from dsms.finance.enums import AccountType, MatchType, ReceiptType, WorkflowStatus
+from dsms.finance.operations_models import FinanceApprovalHistory, FinanceAttachment
 from dsms.finance.procurement_models import (
     PurchaseOrder,
     PurchaseOrderLine,
@@ -109,8 +111,8 @@ def bill_payload(g: dict[str, Any], **overrides: object) -> dict[str, object]:
         "purchase_order": str(g["order"].id),
         "vendor_invoice_number": "SUP-1",
         "bill_number": "BILL-1",
-        "bill_date": "2026-09-03",
-        "due_date": "2026-10-03",
+        "bill_date": "2026-08-15",
+        "due_date": "2026-09-15",
         "match_type": MatchType.TWO_WAY,
         "company": str(CompanyFactory.create().id),
         "status": WorkflowStatus.POSTED,
@@ -387,4 +389,176 @@ def test_duplicate_vendor_reference_and_legacy_total_hardening() -> None:
         Decimal("0"),
         Decimal("0"),
         Decimal("0"),
+    )
+
+
+def test_sequential_workflow_is_least_privilege_balanced_and_idempotent() -> None:
+    g = graph()
+    maker, maker_client = author(g)
+    created = maker_client.post("/api/v1/finance/vendor-bills/", bill_payload(g), format="json")
+    bill_id = created.data["id"]
+    assert (
+        maker_client.post(
+            f"/api/v1/finance/vendor-bills/{bill_id}/submit/", {}, format="json"
+        ).status_code
+        == 400
+    )
+    line = maker_client.post(
+        f"/api/v1/finance/vendor-bills/{bill_id}/lines/", line_payload(g), format="json"
+    )
+    assert line.status_code == 201
+    submitted = maker_client.post(
+        f"/api/v1/finance/vendor-bills/{bill_id}/submit/",
+        {"status": "POSTED", "journal_entry": str(g["company"].id)},
+        format="json",
+    )
+    assert submitted.status_code == 200
+    assert submitted.data["status"] == WorkflowStatus.SUBMITTED
+    assert not maker.has_perm("finance.manage_procurement")
+
+    grant(maker, g["company"], "approve_finance")
+    assert (
+        api(maker)
+        .post(f"/api/v1/finance/vendor-bills/{bill_id}/approve/", {}, format="json")
+        .status_code
+        == 400
+    )
+    checker = UserFactory.create()
+    grant(checker, g["company"], "approve_finance", "post_journal")
+    approved = api(checker).post(
+        f"/api/v1/finance/vendor-bills/{bill_id}/approve/", {}, format="json"
+    )
+    assert approved.status_code == 200
+    assert approved.data["status"] == WorkflowStatus.APPROVED
+    g["vendor"].payable_account.is_active = False
+    g["vendor"].payable_account.save(update_fields=["is_active"])
+    assert (
+        api(checker)
+        .post(f"/api/v1/finance/vendor-bills/{bill_id}/post/", {}, format="json")
+        .status_code
+        == 400
+    )
+    assert VendorBill.objects.get(pk=bill_id).journal_entry_id is None
+    g["vendor"].payable_account.is_active = True
+    g["vendor"].payable_account.save(update_fields=["is_active"])
+    g["accounts"]["expense"].allow_posting = False
+    g["accounts"]["expense"].save(update_fields=["allow_posting"])
+    assert (
+        api(checker)
+        .post(f"/api/v1/finance/vendor-bills/{bill_id}/post/", {}, format="json")
+        .status_code
+        == 400
+    )
+    assert VendorBill.objects.get(pk=bill_id).journal_entry_id is None
+    g["accounts"]["expense"].allow_posting = True
+    g["accounts"]["expense"].save(update_fields=["allow_posting"])
+    posted = api(checker).post(
+        f"/api/v1/finance/vendor-bills/{bill_id}/post/",
+        {"total_amount": "1.00", "company": str(CompanyFactory.create().id)},
+        format="json",
+    )
+    assert posted.status_code == 200, posted.data
+    assert posted.data["status"] == WorkflowStatus.POSTED
+    bill = VendorBill.objects.get(pk=bill_id)
+    journal_id = bill.journal_entry_id
+    assert journal_id is not None
+    journal = bill.journal_entry
+    assert journal is not None
+    assert journal.total_debit == Decimal("220.00")
+    assert journal.total_credit == Decimal("220.00")
+    assert (
+        api(checker)
+        .post(f"/api/v1/finance/vendor-bills/{bill_id}/post/", {}, format="json")
+        .status_code
+        == 200
+    )
+    bill.refresh_from_db()
+    assert bill.journal_entry_id == journal_id
+    assert FinanceApprovalHistory.objects.filter(object_id=bill.id).count() == 2
+
+
+def test_reject_requires_independent_checker_and_reason() -> None:
+    g = graph()
+    maker, client = author(g)
+    created = client.post("/api/v1/finance/vendor-bills/", bill_payload(g), format="json")
+    client.post(
+        f"/api/v1/finance/vendor-bills/{created.data['id']}/lines/",
+        line_payload(g),
+        format="json",
+    )
+    client.post(f"/api/v1/finance/vendor-bills/{created.data['id']}/submit/", {}, format="json")
+    grant(maker, g["company"], "approve_finance")
+    url = f"/api/v1/finance/vendor-bills/{created.data['id']}/reject/"
+    assert api(maker).post(url, {"reason": "Incorrect"}, format="json").status_code == 400
+    checker = UserFactory.create()
+    grant(checker, g["company"], "approve_finance")
+    assert api(checker).post(url, {}, format="json").status_code == 400
+    result = api(checker).post(url, {"reason": "Incorrect price"}, format="json")
+    assert result.status_code == 200
+    assert result.data["status"] == WorkflowStatus.REJECTED
+
+
+def test_vendor_bill_private_attachments_are_nested_and_company_scoped(settings, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    settings.PRIVATE_MEDIA_ROOT = tmp_path / "private-finance"
+    g, other = graph(), graph()
+    _maker, client = author(g)
+    bill = client.post("/api/v1/finance/vendor-bills/", bill_payload(g), format="json")
+    attachment_user = UserFactory.create()
+    grant(attachment_user, g["company"], "manage_finance_attachments")
+    attachment_client = api(attachment_user)
+    url = f"/api/v1/finance/vendor-bills/{bill.data['id']}/attachments/"
+    uploaded = attachment_client.post(
+        url,
+        {
+            "company": str(other["company"].id),
+            "object_id": str(other["company"].id),
+            "file": SimpleUploadedFile("invoice.pdf", b"%PDF-1.4\n%%EOF"),
+        },
+        format="multipart",
+    )
+    assert uploaded.status_code == 201, uploaded.data
+    assert set(uploaded.data) == {"id", "filename", "content_type", "size", "created_at"}
+    item = FinanceAttachment.objects.get(pk=uploaded.data["id"])
+    assert (item.company_id, item.object_id, item.uploaded_by_id) == (
+        g["company"].id,
+        VendorBill.objects.get(pk=bill.data["id"]).id,
+        attachment_user.id,
+    )
+    assert attachment_client.get(url).data == [uploaded.data]
+    download = attachment_client.get(f"{url}{item.id}/download/")
+    assert download.status_code == 200
+    assert download["Cache-Control"] == "private, no-store"
+    assert "url" not in uploaded.data and "file" not in uploaded.data
+    no_permission = UserFactory.create()
+    assert api(no_permission).get(url).status_code == 403
+    wrong_bill = VendorBill.objects.create(
+        company=g["company"],
+        vendor=g["vendor"],
+        vendor_invoice_number="OTHER-ATTACHMENT",
+        bill_number="OTHER-ATTACHMENT",
+        bill_date=date(2026, 9, 3),
+        due_date=date(2026, 10, 3),
+        created_by=g["maker"],
+    )
+    assert (
+        attachment_client.get(
+            f"/api/v1/finance/vendor-bills/{wrong_bill.id}/attachments/{item.id}/download/"
+        ).status_code
+        == 404
+    )
+    grant(attachment_user, other["company"], "manage_finance_attachments")
+    foreign_bill = VendorBill.objects.create(
+        company=other["company"],
+        vendor=other["vendor"],
+        vendor_invoice_number="FOREIGN-ATTACHMENT",
+        bill_number="FOREIGN-ATTACHMENT",
+        bill_date=date(2026, 9, 3),
+        due_date=date(2026, 10, 3),
+        created_by=other["maker"],
+    )
+    assert (
+        attachment_client.get(
+            f"/api/v1/finance/vendor-bills/{foreign_bill.id}/attachments/{item.id}/download/"
+        ).status_code
+        == 404
     )

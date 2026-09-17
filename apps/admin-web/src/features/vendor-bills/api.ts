@@ -4,6 +4,7 @@ import type {
   VendorBill,
   VendorBillPage,
   VendorOption,
+  VendorBillAttachment,
 } from "./types";
 
 export const listVendorBills = (query: Record<string, string>) =>
@@ -46,6 +47,31 @@ export const deleteVendorBillLine = (id: string, lineId: string) =>
     `/api/vendor-bills/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`,
     { method: "DELETE" },
   );
+export const runVendorBillAction = (
+  id: string,
+  action: "submit" | "approve" | "reject" | "post",
+  reason = "",
+) =>
+  apiFetch<VendorBill>(
+    `/api/vendor-bills/${encodeURIComponent(id)}/${action}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(action === "reject" ? { reason } : {}),
+    },
+  );
+export const listVendorBillAttachments = (id: string) =>
+  apiFetch<VendorBillAttachment[]>(
+    `/api/vendor-bills/${encodeURIComponent(id)}/attachments`,
+  );
+export const uploadVendorBillAttachment = (id: string, file: File) => {
+  const body = new FormData();
+  body.set("file", file);
+  return apiFetch<VendorBillAttachment>(
+    `/api/vendor-bills/${encodeURIComponent(id)}/attachments`,
+    { method: "POST", body },
+  );
+};
 export async function listBillVendors() {
   const page = await apiFetch<{ results: VendorOption[] }>("/api/vendors", {
     query: { is_active: "true" },

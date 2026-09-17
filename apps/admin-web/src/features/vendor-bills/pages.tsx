@@ -26,6 +26,10 @@ import type {
   VendorBillLine,
   VendorOption,
 } from "./types";
+import {
+  VendorBillDocuments,
+  VendorBillWorkflow,
+} from "./workflow-and-documents";
 
 const statusLabel = (value: string) => value.replaceAll("_", " ");
 const blankHeader = {
@@ -734,7 +738,7 @@ function Detail({ bill }: { bill: VendorBill }) {
 export function VendorBillDetailPage({ id }: { id: string }) {
   const auth = useAuth();
   const allowed = auth.can("finance.view_vendorbill");
-  const { bill, error } = useBill(id, allowed);
+  const { bill, error, refresh } = useBill(id, allowed);
   if (!allowed)
     return (
       <ErrorState message="You do not have permission to view Vendor Bills." />
@@ -754,7 +758,9 @@ export function VendorBillDetailPage({ id }: { id: string }) {
           ) : undefined
         }
       />
+      <VendorBillWorkflow bill={bill} refresh={refresh} />
       <Detail bill={bill} />
+      <VendorBillDocuments billId={bill.id} />
     </>
   );
 }

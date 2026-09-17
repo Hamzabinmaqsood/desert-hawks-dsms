@@ -51,6 +51,14 @@ export interface VendorBillPage {
   results: VendorBill[];
 }
 
+export interface VendorBillAttachment {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  created_at: string;
+}
+
 export interface VendorOption {
   id: string;
   code: string;

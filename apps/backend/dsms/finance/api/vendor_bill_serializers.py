@@ -3,6 +3,7 @@ from typing import Any
 from rest_framework import serializers
 
 from ..models import Account
+from ..operations_models import FinanceAttachment
 from ..procurement_models import VendorBill, VendorBillLine
 
 
@@ -140,3 +141,11 @@ class VendorBillExpenseAccountSerializer(serializers.ModelSerializer[Account]):
     class Meta:
         model = Account
         fields = ("id", "code", "name", "account_type")
+
+
+class VendorBillAttachmentSerializer(serializers.ModelSerializer[FinanceAttachment]):
+    filename = serializers.CharField(source="original_filename", read_only=True)
+
+    class Meta:
+        model = FinanceAttachment
+        fields = ("id", "filename", "content_type", "size", "created_at")

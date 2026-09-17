@@ -3,7 +3,7 @@ import hashlib
 import io
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models, transaction
@@ -60,8 +60,13 @@ from .procurement_models import (
     PurchaseReceipt,
     PurchaseReceiptLine,
     VendorBill,
+    validate_vendor_payable_account,
 )
 from .services import create_journal, money, next_document_number, post_journal
+from .vendor_bill_services import (
+    validate_vendor_bill_header,
+    validate_vendor_bill_line,
+)
 
 ZERO = Decimal("0.00")
 
@@ -645,52 +650,149 @@ def validate_vendor_bill_match(*, bill: VendorBill) -> None:
                 raise FinanceValidationError({"match": ["Bill exceeds accepted receipt quantity."]})
 
 
+def _validate_vendor_bill_for_workflow(bill: VendorBill) -> list[Any]:
+    try:
+        validate_vendor_bill_header(
+            company_id=bill.company_id,
+            vendor=bill.vendor,
+            purchase_order=bill.purchase_order,
+        )
+        validate_vendor_payable_account(company=bill.company, account=bill.vendor.payable_account)
+        lines = list(
+            bill.lines.select_related(
+                "expense_account",
+                "purchase_order_line__purchase_order",
+                "receipt_line__receipt",
+            )
+        )
+        if not lines:
+            raise DjangoValidationError({"lines": "A Vendor Bill must contain at least one line."})
+        for line in lines:
+            validate_vendor_bill_line(
+                bill=bill,
+                account=line.expense_account,
+                purchase_order_line=line.purchase_order_line,
+                receipt_line=line.receipt_line,
+            )
+    except DjangoValidationError as exc:
+        detail = exc.message_dict if hasattr(exc, "message_dict") else {"bill": exc.messages}
+        raise FinanceValidationError(detail) from exc
+    validate_vendor_bill_match(bill=bill)
+    subtotal = money(sum((line.quantity * line.unit_price for line in lines), ZERO))
+    tax = money(sum((line.tax_amount for line in lines), ZERO))
+    if (
+        subtotal != money(bill.subtotal)
+        or tax != money(bill.tax_amount)
+        or money(subtotal + tax) != money(bill.total_amount)
+    ):
+        raise FinanceValidationError({"total": ["Vendor Bill totals do not match its lines."]})
+    if bill.match_exception.strip():
+        raise FinanceValidationError({"match_exception": ["Resolve the matching exception first."]})
+    return lines
+
+
 @transaction.atomic
-def approve_and_post_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
-    locked = VendorBill.objects.select_for_update().select_related("vendor").get(pk=bill.pk)
+def submit_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
+    locked = (
+        VendorBill.objects.select_for_update(of=("self",))
+        .select_related("company", "vendor__payable_account", "purchase_order")
+        .get(pk=bill.pk)
+    )
+    if locked.status != WorkflowStatus.DRAFT:
+        raise InvalidFinanceTransitionError("Only a draft Vendor Bill can be submitted.")
     if locked.journal_entry_id:
-        return locked
+        raise FinanceValidationError(
+            {"journal_entry": ["A draft Vendor Bill cannot have a journal."]}
+        )
+    _validate_vendor_bill_for_workflow(locked)
+    return cast(
+        VendorBill,
+        submit_finance_document(
+            obj=locked, actor=actor, document_type=ApprovalDocumentType.VENDOR_BILL
+        ),
+    )
+
+
+@transaction.atomic
+def approve_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
+    locked = (
+        VendorBill.objects.select_for_update(of=("self",))
+        .select_related("company", "vendor__payable_account", "purchase_order")
+        .get(pk=bill.pk)
+    )
     if locked.status != WorkflowStatus.SUBMITTED:
-        raise InvalidFinanceTransitionError("Only a submitted vendor bill can be approved.")
+        raise InvalidFinanceTransitionError("Only a submitted Vendor Bill can be approved.")
+    _validate_vendor_bill_for_workflow(locked)
+    return cast(
+        VendorBill,
+        approve_finance_document(
+            obj=locked, actor=actor, document_type=ApprovalDocumentType.VENDOR_BILL
+        ),
+    )
+
+
+@transaction.atomic
+def reject_vendor_bill(*, bill: VendorBill, actor: User, reason: str) -> VendorBill:
+    locked = VendorBill.objects.select_for_update().get(pk=bill.pk)
     _maker_checker(locked.created_by_id, actor)
-    validate_vendor_bill_match(bill=locked)
-    line_total = sum((line.line_total for line in locked.lines.all()), ZERO)
-    if money(line_total) != money(locked.total_amount):
-        raise FinanceValidationError({"total": ["Vendor bill lines do not equal bill total."]})
+    return cast(
+        VendorBill,
+        reject_finance_document(
+            obj=locked,
+            actor=actor,
+            document_type=ApprovalDocumentType.VENDOR_BILL,
+            reason=reason,
+        ),
+    )
+
+
+@transaction.atomic
+def post_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
+    locked = (
+        VendorBill.objects.select_for_update(of=("self",))
+        .select_related("company", "vendor__payable_account", "purchase_order", "journal_entry")
+        .get(pk=bill.pk)
+    )
+    if locked.status == WorkflowStatus.POSTED and locked.journal_entry_id:
+        return locked
+    if locked.status != WorkflowStatus.APPROVED:
+        raise InvalidFinanceTransitionError("Only an approved Vendor Bill can be posted.")
+    if locked.journal_entry_id:
+        raise FinanceValidationError({"journal_entry": ["Vendor Bill already has a journal."]})
+    lines = _validate_vendor_bill_for_workflow(locked)
     period = _period_for(locked.company_id, locked.bill_date)
     journal = create_journal(
         company=locked.company,
         fiscal_year=period.fiscal_year,
         accounting_period=period,
         entry_date=locked.bill_date,
-        description=f"Vendor bill {locked.bill_number}",
+        description=f"Vendor Bill {locked.bill_number}",
         created_by=locked.created_by,
         source_type="VENDOR_BILL",
         source_id=locked.id,
         lines=[
-            *[
-                {"account": line.expense_account, "debit": line.line_total}
-                for line in locked.lines.select_related("expense_account")
-            ],
+            *[{"account": line.expense_account, "debit": line.line_total} for line in lines],
             {"account": locked.vendor.payable_account, "credit": locked.total_amount},
         ],
     )
     journal.status, journal.approved_by, journal.approved_at = "APPROVED", actor, timezone.now()
     journal.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
     journal = post_journal(journal=journal, actor=actor)
-    locked.status, locked.approved_by, locked.journal_entry = (
-        WorkflowStatus.APPROVED,
-        actor,
-        journal,
-    )
-    locked.save(update_fields=["status", "approved_by", "journal_entry", "updated_at"])
-    _history(
-        obj=locked,
-        document_type=ApprovalDocumentType.VENDOR_BILL,
-        actor=actor,
-        decision=ApprovalDecision.APPROVED,
-    )
+    locked.status = WorkflowStatus.POSTED
+    locked.journal_entry = journal
+    locked.save(update_fields=["status", "journal_entry", "updated_at"])
     return locked
+
+
+@transaction.atomic
+def approve_and_post_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
+    current = VendorBill.objects.get(pk=bill.pk)
+    if current.status == WorkflowStatus.POSTED and current.journal_entry_id:
+        return current
+    approved = approve_vendor_bill(bill=bill, actor=actor)
+    if approved.status != WorkflowStatus.APPROVED:
+        return approved
+    return post_vendor_bill(bill=approved, actor=actor)
 
 
 @transaction.atomic

@@ -100,6 +100,19 @@ const ACTORS = {
       "finance.add_vendorbillline",
       "finance.change_vendorbillline",
       "finance.delete_vendorbillline",
+      "finance.manage_finance_attachments",
+    ],
+  },
+  billchecker: {
+    id: APPROVER_ID,
+    email: "billchecker@example.test",
+    first_name: "Bill",
+    last_name: "Checker",
+    permissions: [
+      "finance.view_vendorbill",
+      "finance.approve_finance",
+      "finance.post_journal",
+      "finance.manage_finance_attachments",
     ],
   },
 };
@@ -268,6 +281,7 @@ let vendor = {
 const VENDOR_BILL_ID = "81000000-0000-0000-0000-000000000001";
 const VENDOR_BILL_ACCOUNT_ID = "50000000-0000-0000-0000-000000000300";
 let vendorBill = null;
+let vendorBillAttachment = null;
 const vendorBillBody = () => ({
   ...vendorBill,
   vendor_code: vendor?.code ?? "V-E2E-001",
@@ -464,6 +478,50 @@ createServer(async (request, response) => {
     return vendorBill
       ? json(response, 200, vendorBillBody())
       : json(response, 404, { detail: "Not found" });
+  for (const [action, target] of [
+    ["submit", "SUBMITTED"],
+    ["approve", "APPROVED"],
+    ["post", "POSTED"],
+  ]) {
+    if (
+      path === `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/${action}/` &&
+      request.method === "POST"
+    ) {
+      vendorBill.status = target;
+      return json(response, 200, vendorBillBody());
+    }
+  }
+  if (
+    path === `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/attachments/` &&
+    request.method === "POST"
+  ) {
+    request.resume();
+    vendorBillAttachment = {
+      id: "83000000-0000-0000-0000-000000000001",
+      filename: "supplier-invoice.pdf",
+      content_type: "application/pdf",
+      size: 14,
+      created_at: "2026-09-17T10:00:00Z",
+    };
+    return json(response, 201, vendorBillAttachment);
+  }
+  if (path === `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/attachments/`)
+    return json(
+      response,
+      200,
+      vendorBillAttachment ? [vendorBillAttachment] : [],
+    );
+  if (
+    path ===
+    `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/attachments/83000000-0000-0000-0000-000000000001/download/`
+  ) {
+    response.writeHead(200, {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": "attachment; filename=supplier-invoice.pdf",
+      "Cache-Control": "private, no-store",
+    });
+    return response.end("%PDF-1.4\n%%EOF");
+  }
   if (
     path === `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/lines/` &&
     request.method === "POST"
