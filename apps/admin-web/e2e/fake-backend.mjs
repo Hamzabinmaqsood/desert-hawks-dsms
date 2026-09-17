@@ -76,6 +76,17 @@ const ACTORS = {
       "billing.view_clientinvoice",
     ],
   },
+  vendormanager: {
+    id: MAKER_ID,
+    email: "vendormanager@example.test",
+    first_name: "Vendor",
+    last_name: "Manager",
+    permissions: [
+      "finance.view_vendor",
+      "finance.add_vendor",
+      "finance.change_vendor",
+    ],
+  },
 };
 
 const actorKeyForEmail = (email) => {
@@ -225,6 +236,18 @@ const invoice = {
 const RECEIPT_ID = "70000000-0000-0000-0000-000000000001";
 let receipt = null;
 
+const VENDOR_ID = "80000000-0000-0000-0000-000000000001";
+const PAYABLE_ACCOUNT_ID = "50000000-0000-0000-0000-000000000200";
+let vendor = null;
+
+const vendorBody = () => ({
+  ...vendor,
+  payable_account_code: "2000",
+  payable_account_name: "Trade Payables",
+  created_at: "2026-09-13T09:00:00Z",
+  updated_at: "2026-09-13T09:00:00Z",
+});
+
 function receiptBody() {
   return {
     ...receipt,
@@ -298,6 +321,57 @@ createServer(async (request, response) => {
       accessible_department_ids: [],
       accessible_operational_zone_ids: [],
       assignments: [],
+    });
+  }
+  if (path === "/api/v1/finance/ap-reference/payable-accounts/")
+    return json(response, 200, [
+      { id: PAYABLE_ACCOUNT_ID, code: "2000", name: "Trade Payables" },
+    ]);
+  if (path === "/api/v1/finance/vendors/" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    vendor = {
+      id: VENDOR_ID,
+      code: body.code,
+      name: body.name,
+      tax_number: body.tax_number ?? "",
+      email: body.email ?? "",
+      phone: body.phone ?? "",
+      payment_terms_days: Number(body.payment_terms_days),
+      payable_account: body.payable_account,
+      is_active: body.is_active ?? true,
+    };
+    return json(response, 201, vendorBody());
+  }
+  if (
+    path === `/api/v1/finance/vendors/${VENDOR_ID}/` &&
+    request.method === "PATCH"
+  ) {
+    const body = await readJsonBody(request);
+    vendor = { ...vendor, ...body };
+    return json(response, 200, vendorBody());
+  }
+  if (path === `/api/v1/finance/vendors/${VENDOR_ID}/`)
+    return vendor
+      ? json(response, 200, vendorBody())
+      : json(response, 404, { detail: "Not found" });
+  if (
+    path === "/api/v1/finance/vendors/" ||
+    path?.startsWith("/api/v1/finance/vendors/?")
+  ) {
+    const query = new URL(path, "http://backend.test").searchParams;
+    const matches =
+      vendor &&
+      (!query.get("search") ||
+        `${vendor.code} ${vendor.name}`
+          .toLowerCase()
+          .includes(query.get("search").toLowerCase())) &&
+      (!query.get("is_active") ||
+        String(vendor.is_active) === query.get("is_active"));
+    return json(response, 200, {
+      count: matches ? 1 : 0,
+      next: null,
+      previous: null,
+      results: matches ? [vendorBody()] : [],
     });
   }
   if (path === "/api/v1/billing/billing-profiles/?is_active=true") {

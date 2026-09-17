@@ -8,7 +8,7 @@ from dsms.common.models import ActiveModel, TimeStampedModel, UUIDModel
 from dsms.identity.models import User
 from dsms.organization.models import Branch, Company, Department
 
-from .enums import MatchType, PaymentStatus, ReceiptType, WorkflowStatus
+from .enums import AccountType, MatchType, PaymentStatus, ReceiptType, WorkflowStatus
 from .models import Account, CostCenter, JournalEntry
 
 
@@ -25,6 +25,32 @@ class Vendor(UUIDModel, TimeStampedModel, ActiveModel):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["company", "code"], name="uniq_vendor_code")]
+
+    def clean(self) -> None:
+        validate_vendor_payable_account(company=self.company, account=self.payable_account)
+
+
+def validate_vendor_payable_account(*, company: Company, account: Account) -> None:
+    """Enforce the strongest AP-account policy represented by the current schema."""
+    if account.company_id != company.id:
+        raise ValidationError(
+            {"payable_account": "The selected account belongs to another company."}
+        )
+    if (
+        account.account_type != AccountType.LIABILITY
+        or not account.is_active
+        or not account.allow_posting
+    ):
+        raise ValidationError(
+            {"payable_account": "The selected account is not an eligible AP payable account."}
+        )
+    from .payment_models import PaymentAccountingProfile
+
+    profile = PaymentAccountingProfile.objects.filter(company=company, is_active=True).first()
+    if profile and profile.vendor_payable_account_id != account.id:
+        raise ValidationError(
+            {"payable_account": "Select the configured vendor payable control account."}
+        )
 
 
 class PurchaseRequisition(UUIDModel, TimeStampedModel):

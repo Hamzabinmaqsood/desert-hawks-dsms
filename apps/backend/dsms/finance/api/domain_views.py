@@ -49,6 +49,7 @@ from ..procurement_models import (
     Vendor,
     VendorBill,
 )
+from .vendor_serializers import vendor_account_error
 from .views import FinancePermission
 
 DOMAIN_MODELS: dict[str, type[models.Model]] = {
@@ -175,6 +176,11 @@ class DomainCollectionView(FinanceAPIView):
         model, permission, ids = self._context(request, resource)
         serializer = serializer_for(model)(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if model is Vendor:
+            vendor_account_error(
+                serializer.validated_data["company"],
+                serializer.validated_data["payable_account"],
+            )
         model_fields = {field.name for field in model._meta.fields}
         extras: dict[str, Any] = {}
         if "created_by" in model_fields:

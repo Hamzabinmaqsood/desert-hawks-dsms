@@ -24,6 +24,11 @@ const navigation: NavigationItem[] = [
     href: "/receipts",
     permissions: ["billing.view_clientreceipt"],
   },
+  {
+    label: "Vendors",
+    href: "/vendors",
+    permissions: ["finance.view_vendor"],
+  },
 ];
 
 export function Sidebar({

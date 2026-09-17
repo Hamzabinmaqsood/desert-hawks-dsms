@@ -235,3 +235,46 @@ test("least-privilege actors complete the Invoice and Receipt lifecycle", async 
   await expect(page.getByText(/^PKR\s+0\.00$/).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "RCPT-E2E-001" })).toHaveCount(2);
 });
+
+test("least-privilege Vendor manager creates, edits, and searches Vendor master data", async ({
+  page,
+}) => {
+  await signIn(page, "vendormanager@example.test");
+  const sessionResponse = await page.request.get("/api/auth/session");
+  const session = await sessionResponse.json();
+  expect(session.permissions).toEqual([
+    "finance.view_vendor",
+    "finance.add_vendor",
+    "finance.change_vendor",
+  ]);
+  expect(session.permissions).not.toContain("finance.manage_procurement");
+  expect(session.permissions).not.toContain("finance.manage_chart_of_accounts");
+
+  await page.getByRole("link", { name: "Vendors" }).click();
+  await expect(page).toHaveURL(/\/vendors$/);
+  await page.getByRole("link", { name: "New Vendor" }).click();
+  await page.getByLabel("Code").fill("V-E2E-001");
+  await page.getByLabel("Vendor name").fill("E2E Secure Supplier");
+  await page.getByLabel("Tax number").fill("NTN-E2E");
+  await page.getByLabel("Email").fill("supplier@example.test");
+  await page
+    .getByLabel("Payable account")
+    .selectOption({ label: "2000 — Trade Payables" });
+  await page.getByRole("button", { name: "Save Vendor" }).click();
+
+  await expect(page).toHaveURL(/\/vendors\/80000000-/);
+  await expect(
+    page.getByRole("heading", { name: "E2E Secure Supplier" }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Edit Vendor" }).click();
+  await page.getByLabel("Vendor name").fill("E2E Updated Supplier");
+  await page.getByRole("button", { name: "Save Vendor" }).click();
+  await expect(
+    page.getByRole("heading", { name: "E2E Updated Supplier" }),
+  ).toBeVisible();
+
+  await page.getByRole("link", { name: "Vendors" }).first().click();
+  await page.getByLabel("Search").fill("Updated Supplier");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page.getByRole("link", { name: "V-E2E-001" })).toBeVisible();
+});

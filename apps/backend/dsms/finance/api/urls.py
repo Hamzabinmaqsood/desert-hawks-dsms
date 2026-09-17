@@ -20,6 +20,7 @@ from .payment_views import (
     PaymentProviderViewSet,
     PaymentSettlementViewSet,
 )
+from .vendor_views import VendorPayableAccountViewSet, VendorViewSet
 from .views import (
     AccountViewSet,
     FiscalYearViewSet,
@@ -39,6 +40,12 @@ router.register("payment-beneficiaries", PaymentBeneficiaryViewSet, basename="pa
 router.register("payment-batches", PaymentBatchViewSet, basename="payment-batch")
 router.register("payment-instructions", PaymentInstructionViewSet, basename="payment-instruction")
 router.register("payment-settlements", PaymentSettlementViewSet, basename="payment-settlement")
+router.register("vendors", VendorViewSet, basename="vendor")
+router.register(
+    "ap-reference/payable-accounts",
+    VendorPayableAccountViewSet,
+    basename="vendor-payable-account",
+)
 urlpatterns = [
     *router.urls,
     path("reports/trial-balance/", TrialBalanceView.as_view(), name="trial-balance"),
