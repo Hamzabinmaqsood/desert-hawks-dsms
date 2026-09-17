@@ -1,0 +1,390 @@
+# mypy: disable-error-code="arg-type"
+from datetime import date
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from django.contrib.auth.models import Permission
+from rest_framework.test import APIClient
+
+from dsms.finance import services
+from dsms.finance.enums import AccountType, MatchType, ReceiptType, WorkflowStatus
+from dsms.finance.procurement_models import (
+    PurchaseOrder,
+    PurchaseOrderLine,
+    PurchaseReceipt,
+    PurchaseReceiptLine,
+    PurchaseRequisition,
+    PurchaseRequisitionLine,
+    Vendor,
+    VendorBill,
+)
+from dsms.identity.enums import AccessScopeType
+from dsms.identity.models import User
+from tests.factories.finance import accounting_setup
+from tests.factories.identity import RoleFactory, UserFactory, UserRoleAssignmentFactory
+from tests.factories.organization import CompanyFactory
+
+pytestmark = pytest.mark.django_db
+
+
+def grant(user: User, company: object, *codenames: str) -> None:
+    role = RoleFactory.create()
+    role.permissions.add(
+        *Permission.objects.filter(content_type__app_label="finance", codename__in=codenames)
+    )
+    UserRoleAssignmentFactory.create(
+        user=user, role=role, scope_type=AccessScopeType.COMPANY, company=company
+    )
+
+
+def api(user: User) -> APIClient:
+    client = APIClient()
+    client.force_authenticate(user)
+    return client
+
+
+def graph() -> dict[str, Any]:
+    company = CompanyFactory.create()
+    maker, checker = UserFactory.create(), UserFactory.create()
+    _year, _period, accounts = accounting_setup(company)
+    asset = services.create_account(
+        company=company, code="1100", name="Equipment", account_type=AccountType.ASSET
+    )
+    vendor = Vendor.objects.create(
+        company=company, code="V-1", name="Supplier", payable_account=accounts["payable"]
+    )
+    requisition = PurchaseRequisition.objects.create(
+        company=company,
+        requisition_number="REQ-1",
+        required_date=date(2026, 9, 1),
+        purpose="Radios",
+        status=WorkflowStatus.APPROVED,
+        created_by=maker,
+    )
+    req_line = PurchaseRequisitionLine.objects.create(
+        requisition=requisition,
+        description="Radios",
+        quantity=10,
+        estimated_unit_price=100,
+        expense_account=accounts["expense"],
+    )
+    order = PurchaseOrder.objects.create(
+        company=company,
+        requisition=requisition,
+        vendor=vendor,
+        order_number="PO-1",
+        order_date=date(2026, 9, 1),
+        status=WorkflowStatus.APPROVED,
+        created_by=maker,
+    )
+    po_line = PurchaseOrderLine.objects.create(
+        purchase_order=order,
+        requisition_line=req_line,
+        description="Radios",
+        quantity=10,
+        unit_price=100,
+    )
+    receipt = PurchaseReceipt.objects.create(
+        company=company,
+        purchase_order=order,
+        receipt_number="GRN-1",
+        receipt_date=date(2026, 9, 2),
+        receipt_type=ReceiptType.GOODS,
+        status=WorkflowStatus.APPROVED,
+        received_by=maker,
+    )
+    receipt_line = PurchaseReceiptLine.objects.create(
+        receipt=receipt,
+        purchase_order_line=po_line,
+        quantity=10,
+        accepted_quantity=10,
+    )
+    return locals()
+
+
+def bill_payload(g: dict[str, Any], **overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "vendor": str(g["vendor"].id),
+        "purchase_order": str(g["order"].id),
+        "vendor_invoice_number": "SUP-1",
+        "bill_number": "BILL-1",
+        "bill_date": "2026-09-03",
+        "due_date": "2026-10-03",
+        "match_type": MatchType.TWO_WAY,
+        "company": str(CompanyFactory.create().id),
+        "status": WorkflowStatus.POSTED,
+        "subtotal": "999",
+        "tax_amount": "999",
+        "total_amount": "999",
+        "paid_amount": "999",
+        "match_exception": "attacker",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def line_payload(g: dict[str, Any], **overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "description": "Radios",
+        "quantity": "2",
+        "unit_price": "100.00",
+        "tax_amount": "20.00",
+        "expense_account": str(g["accounts"]["expense"].id),
+        "purchase_order_line": str(g["po_line"].id),
+        "receipt_line": None,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def author(g: dict[str, Any]) -> tuple[User, APIClient]:
+    user = UserFactory.create()
+    grant(
+        user,
+        g["company"],
+        "view_vendorbill",
+        "add_vendorbill",
+        "change_vendorbill",
+        "add_vendorbillline",
+        "change_vendorbillline",
+        "delete_vendorbillline",
+    )
+    return user, api(user)
+
+
+def test_bill_crud_scope_permissions_and_server_owned_fields() -> None:
+    g, other = graph(), graph()
+    user, client = author(g)
+    hidden = VendorBill.objects.create(
+        company=other["company"],
+        vendor=other["vendor"],
+        vendor_invoice_number="HIDDEN",
+        bill_number="HIDDEN",
+        bill_date=date(2026, 9, 1),
+        due_date=date(2026, 9, 2),
+        created_by=other["maker"],
+    )
+    response = client.post("/api/v1/finance/vendor-bills/", bill_payload(g), format="json")
+    assert response.status_code == 201, response.data
+    bill = VendorBill.objects.get(pk=response.data["id"])
+    assert (bill.company, bill.created_by, bill.status) == (
+        g["company"],
+        user,
+        WorkflowStatus.DRAFT,
+    )
+    assert (bill.subtotal, bill.tax_amount, bill.total_amount, bill.paid_amount) == (
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+    )
+    assert bill.match_exception == ""
+    listed = client.get("/api/v1/finance/vendor-bills/")
+    assert [row["id"] for row in listed.data["results"]] == [str(bill.id)]
+    assert client.get(f"/api/v1/finance/vendor-bills/{hidden.id}/").status_code == 404
+    assert client.patch(f"/api/v1/finance/vendor-bills/{hidden.id}/", {}).status_code == 404
+    assert not user.has_perm("finance.manage_procurement")
+
+
+def test_generated_bill_and_line_permissions_are_enforced() -> None:
+    g = graph()
+    viewer, creator = UserFactory.create(), UserFactory.create()
+    grant(viewer, g["company"], "view_vendorbill")
+    grant(creator, g["company"], "add_vendorbill")
+    assert (
+        api(viewer)
+        .post("/api/v1/finance/vendor-bills/", bill_payload(g), format="json")
+        .status_code
+        == 403
+    )
+    created = api(creator).post("/api/v1/finance/vendor-bills/", bill_payload(g), format="json")
+    assert created.status_code == 201
+    assert (
+        api(creator).get(f"/api/v1/finance/vendor-bills/{created.data['id']}/").status_code == 403
+    )
+    line_url = f"/api/v1/finance/vendor-bills/{created.data['id']}/lines/"
+    line_adder = UserFactory.create()
+    grant(line_adder, g["company"], "add_vendorbillline")
+    line = api(line_adder).post(line_url, line_payload(g), format="json")
+    assert line.status_code == 201
+    assert (
+        api(line_adder)
+        .patch(f"{line_url}{line.data['id']}/", {"quantity": "3"}, format="json")
+        .status_code
+        == 403
+    )
+    line_editor = UserFactory.create()
+    grant(line_editor, g["company"], "change_vendorbillline")
+    assert (
+        api(line_editor)
+        .patch(f"{line_url}{line.data['id']}/", {"quantity": "3"}, format="json")
+        .status_code
+        == 200
+    )
+    assert api(line_editor).delete(f"{line_url}{line.data['id']}/").status_code == 403
+    line_deleter = UserFactory.create()
+    grant(line_deleter, g["company"], "delete_vendorbillline")
+    assert api(line_deleter).delete(f"{line_url}{line.data['id']}/").status_code == 204
+
+
+def test_line_crud_recalculates_authoritative_totals_and_is_draft_only() -> None:
+    g = graph()
+    _user, client = author(g)
+    created = client.post("/api/v1/finance/vendor-bills/", bill_payload(g), format="json")
+    url = f"/api/v1/finance/vendor-bills/{created.data['id']}/lines/"
+    line = client.post(url, line_payload(g), format="json")
+    assert line.status_code == 201, line.data
+    bill = VendorBill.objects.get(pk=created.data["id"])
+    assert (bill.subtotal, bill.tax_amount, bill.total_amount) == (
+        Decimal("200.00"),
+        Decimal("20.00"),
+        Decimal("220.00"),
+    )
+    assert (
+        client.patch(
+            f"/api/v1/finance/vendor-bills/{bill.id}/",
+            {"match_type": MatchType.THREE_WAY},
+            format="json",
+        ).status_code
+        == 400
+    )
+    assert (
+        client.patch(
+            f"/api/v1/finance/vendor-bills/{bill.id}/",
+            {"purchase_order": None},
+            format="json",
+        ).status_code
+        == 400
+    )
+    line_url = f"{url}{line.data['id']}/"
+    assert (
+        client.patch(line_url, {"quantity": "3", "tax_amount": "30"}, format="json").status_code
+        == 200
+    )
+    bill.refresh_from_db()
+    assert (bill.subtotal, bill.tax_amount, bill.total_amount) == (
+        Decimal("300.00"),
+        Decimal("30.00"),
+        Decimal("330.00"),
+    )
+    assert client.delete(line_url).status_code == 204
+    bill.refresh_from_db()
+    assert (bill.subtotal, bill.tax_amount, bill.total_amount) == (
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+    )
+    bill.status = WorkflowStatus.SUBMITTED
+    bill.save(update_fields=["status"])
+    assert (
+        client.patch(
+            f"/api/v1/finance/vendor-bills/{bill.id}/", {"due_date": "2026-11-01"}
+        ).status_code
+        == 400
+    )
+    assert client.post(url, line_payload(g), format="json").status_code == 400
+
+
+@pytest.mark.parametrize(
+    "kind", ["cross", "inactive", "nonposting", "LIABILITY", "REVENUE", "EQUITY"]
+)
+def test_expense_account_policy(kind: str) -> None:
+    g = graph()
+    _user, client = author(g)
+    bill = client.post("/api/v1/finance/vendor-bills/", bill_payload(g), format="json")
+    if kind == "cross":
+        other = graph()
+        account = other["accounts"]["expense"]
+    else:
+        account_type = AccountType.EXPENSE if kind in {"inactive", "nonposting"} else kind
+        account = services.create_account(
+            company=g["company"],
+            code=f"X-{kind}",
+            name=kind,
+            account_type=account_type,
+            allow_posting=kind != "nonposting",
+        )
+        if kind == "inactive":
+            account.is_active = False
+            account.save(update_fields=["is_active"])
+    response = client.post(
+        f"/api/v1/finance/vendor-bills/{bill.data['id']}/lines/",
+        line_payload(g, expense_account=str(account.id)),
+        format="json",
+    )
+    assert response.status_code == 400
+    assert "expense_account" in response.data
+
+
+def test_asset_account_three_way_relationships_and_nested_line_scope() -> None:
+    g, other = graph(), graph()
+    _user, client = author(g)
+    bill = client.post(
+        "/api/v1/finance/vendor-bills/",
+        bill_payload(g, match_type=MatchType.THREE_WAY),
+        format="json",
+    )
+    valid = client.post(
+        f"/api/v1/finance/vendor-bills/{bill.data['id']}/lines/",
+        line_payload(g, expense_account=str(g["asset"].id), receipt_line=str(g["receipt_line"].id)),
+        format="json",
+    )
+    assert valid.status_code == 201, valid.data
+    unrelated = client.post(
+        f"/api/v1/finance/vendor-bills/{bill.data['id']}/lines/",
+        line_payload(g, receipt_line=str(other["receipt_line"].id)),
+        format="json",
+    )
+    assert unrelated.status_code == 400
+    other_bill = VendorBill.objects.create(
+        company=g["company"],
+        vendor=g["vendor"],
+        vendor_invoice_number="OTHER",
+        bill_number="B2",
+        bill_date=date(2026, 9, 1),
+        due_date=date(2026, 9, 2),
+        created_by=g["maker"],
+    )
+    assert (
+        client.delete(
+            f"/api/v1/finance/vendor-bills/{other_bill.id}/lines/{valid.data['id']}/"
+        ).status_code
+        == 404
+    )
+
+
+def test_duplicate_vendor_reference_and_legacy_total_hardening() -> None:
+    g = graph()
+    _user, client = author(g)
+    first = client.post("/api/v1/finance/vendor-bills/", bill_payload(g), format="json")
+    assert first.status_code == 201
+    duplicate = client.post(
+        "/api/v1/finance/vendor-bills/", bill_payload(g, bill_number="BILL-2"), format="json"
+    )
+    assert duplicate.status_code == 400
+    assert "vendor_invoice_number" in duplicate.data
+    reference = client.get("/api/v1/finance/ap-reference/expense-accounts/")
+    assert reference.status_code == 200
+    assert {row["account_type"] for row in reference.data} == {"ASSET", "EXPENSE"}
+    assert all(set(row) == {"id", "code", "name", "account_type"} for row in reference.data)
+    assert not _user.has_perm("finance.manage_chart_of_accounts")
+    superuser = UserFactory.create(is_superuser=True)
+    legacy = api(superuser).post(
+        "/api/v1/finance/domain/vendor-bills/",
+        bill_payload(
+            g,
+            vendor_invoice_number="LEGACY",
+            company=str(g["company"].id),
+            created_by=str(UserFactory.create().id),
+        ),
+        format="json",
+    )
+    assert legacy.status_code == 201, legacy.data
+    stored = VendorBill.objects.get(pk=legacy.data["id"])
+    assert (stored.subtotal, stored.tax_amount, stored.total_amount, stored.paid_amount) == (
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+    )

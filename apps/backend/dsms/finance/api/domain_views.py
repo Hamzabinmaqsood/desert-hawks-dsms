@@ -2,6 +2,7 @@ from datetime import date
 from typing import Any, cast
 from uuid import UUID
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models, transaction
 from django.http import FileResponse
 from drf_spectacular.utils import extend_schema
@@ -16,7 +17,7 @@ from dsms.identity import access
 from dsms.identity.models import User
 
 from .. import domain_selectors, domain_services
-from ..enums import ApprovalDocumentType
+from ..enums import ApprovalDocumentType, WorkflowStatus
 from ..exceptions import FinanceError, to_error_dict
 from ..models import Account, JournalEntry
 from ..operations_models import (
@@ -49,6 +50,7 @@ from ..procurement_models import (
     Vendor,
     VendorBill,
 )
+from ..vendor_bill_services import validate_vendor_bill_header
 from .vendor_serializers import vendor_account_error
 from .views import FinancePermission
 
@@ -181,10 +183,28 @@ class DomainCollectionView(FinanceAPIView):
                 serializer.validated_data["company"],
                 serializer.validated_data["payable_account"],
             )
+        if model is VendorBill:
+            try:
+                validate_vendor_bill_header(
+                    company_id=serializer.validated_data["company"].id,
+                    vendor=serializer.validated_data["vendor"],
+                    purchase_order=serializer.validated_data.get("purchase_order"),
+                )
+            except DjangoValidationError as exc:
+                raise ValidationError(exc.message_dict) from exc
         model_fields = {field.name for field in model._meta.fields}
         extras: dict[str, Any] = {}
         if "created_by" in model_fields:
             extras["created_by"] = request.user
+        if model is VendorBill:
+            extras.update(
+                status=WorkflowStatus.DRAFT,
+                subtotal=0,
+                tax_amount=0,
+                total_amount=0,
+                paid_amount=0,
+                match_exception="",
+            )
         for field in SENSITIVE_FIELDS & model_fields:
             extras[field] = request.data.get(field, "")
         item = serializer.save(**extras)
