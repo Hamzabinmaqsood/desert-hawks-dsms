@@ -87,6 +87,21 @@ const ACTORS = {
       "finance.change_vendor",
     ],
   },
+  billauthor: {
+    id: MAKER_ID,
+    email: "billauthor@example.test",
+    first_name: "Bill",
+    last_name: "Author",
+    permissions: [
+      "finance.view_vendorbill",
+      "finance.add_vendorbill",
+      "finance.change_vendorbill",
+      "finance.view_vendor",
+      "finance.add_vendorbillline",
+      "finance.change_vendorbillline",
+      "finance.delete_vendorbillline",
+    ],
+  },
 };
 
 const actorKeyForEmail = (email) => {
@@ -238,7 +253,46 @@ let receipt = null;
 
 const VENDOR_ID = "80000000-0000-0000-0000-000000000001";
 const PAYABLE_ACCOUNT_ID = "50000000-0000-0000-0000-000000000200";
-let vendor = null;
+let vendor = {
+  id: VENDOR_ID,
+  code: "V-E2E-001",
+  name: "E2E Updated Supplier",
+  tax_number: "NTN-E2E",
+  email: "supplier@example.test",
+  phone: "",
+  payment_terms_days: 30,
+  payable_account: PAYABLE_ACCOUNT_ID,
+  is_active: true,
+};
+
+const VENDOR_BILL_ID = "81000000-0000-0000-0000-000000000001";
+const VENDOR_BILL_ACCOUNT_ID = "50000000-0000-0000-0000-000000000300";
+let vendorBill = null;
+const vendorBillBody = () => ({
+  ...vendorBill,
+  vendor_code: vendor?.code ?? "V-E2E-001",
+  vendor_name: vendor?.name ?? "E2E Updated Supplier",
+  outstanding_amount: vendorBill
+    ? (
+        Number(vendorBill.total_amount) - Number(vendorBill.paid_amount)
+      ).toFixed(2)
+    : "0.00",
+});
+function recomputeVendorBill() {
+  const lines = vendorBill?.lines ?? [];
+  vendorBill.subtotal = lines
+    .reduce(
+      (sum, line) => sum + Number(line.quantity) * Number(line.unit_price),
+      0,
+    )
+    .toFixed(2);
+  vendorBill.tax_amount = lines
+    .reduce((sum, line) => sum + Number(line.tax_amount), 0)
+    .toFixed(2);
+  vendorBill.total_amount = (
+    Number(vendorBill.subtotal) + Number(vendorBill.tax_amount)
+  ).toFixed(2);
+}
 
 const vendorBody = () => ({
   ...vendor,
@@ -374,6 +428,98 @@ createServer(async (request, response) => {
       results: matches ? [vendorBody()] : [],
     });
   }
+  if (path === "/api/v1/finance/ap-reference/expense-accounts/")
+    return json(response, 200, [
+      {
+        id: VENDOR_BILL_ACCOUNT_ID,
+        code: "5000",
+        name: "Operating Supplies",
+        account_type: "EXPENSE",
+      },
+    ]);
+  if (path === "/api/v1/finance/vendor-bills/" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    vendorBill = {
+      id: VENDOR_BILL_ID,
+      ...body,
+      status: "DRAFT",
+      subtotal: "0.00",
+      tax_amount: "0.00",
+      total_amount: "0.00",
+      paid_amount: "0.00",
+      match_exception: "",
+      purchase_order: null,
+      lines: [],
+    };
+    return json(response, 201, vendorBillBody());
+  }
+  if (
+    path === `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/` &&
+    request.method === "PATCH"
+  ) {
+    vendorBill = { ...vendorBill, ...(await readJsonBody(request)) };
+    return json(response, 200, vendorBillBody());
+  }
+  if (path === `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/`)
+    return vendorBill
+      ? json(response, 200, vendorBillBody())
+      : json(response, 404, { detail: "Not found" });
+  if (
+    path === `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/lines/` &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    const line = {
+      id: "82000000-0000-0000-0000-000000000001",
+      purchase_order_line: null,
+      receipt_line: null,
+      ...body,
+      expense_account_code: "5000",
+      expense_account_name: "Operating Supplies",
+      line_total: (
+        Number(body.quantity) * Number(body.unit_price) +
+        Number(body.tax_amount)
+      ).toFixed(2),
+    };
+    vendorBill.lines.push(line);
+    recomputeVendorBill();
+    return json(response, 201, line);
+  }
+  if (
+    path ===
+      `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/lines/82000000-0000-0000-0000-000000000001/` &&
+    request.method === "PATCH"
+  ) {
+    const body = await readJsonBody(request);
+    vendorBill.lines[0] = { ...vendorBill.lines[0], ...body };
+    vendorBill.lines[0].line_total = (
+      Number(vendorBill.lines[0].quantity) *
+        Number(vendorBill.lines[0].unit_price) +
+      Number(vendorBill.lines[0].tax_amount)
+    ).toFixed(2);
+    recomputeVendorBill();
+    return json(response, 200, vendorBill.lines[0]);
+  }
+  if (
+    path ===
+      `/api/v1/finance/vendor-bills/${VENDOR_BILL_ID}/lines/82000000-0000-0000-0000-000000000001/` &&
+    request.method === "DELETE"
+  ) {
+    vendorBill.lines = [];
+    recomputeVendorBill();
+    response.writeHead(204);
+    return response.end();
+  }
+  if (
+    path === "/api/v1/finance/vendor-bills/" ||
+    path?.startsWith("/api/v1/finance/vendor-bills/?")
+  )
+    return json(response, 200, {
+      count: vendorBill ? 1 : 0,
+      next: null,
+      previous: null,
+      results: vendorBill ? [vendorBillBody()] : [],
+    });
   if (path === "/api/v1/billing/billing-profiles/?is_active=true") {
     return json(response, 200, {
       count: 1,

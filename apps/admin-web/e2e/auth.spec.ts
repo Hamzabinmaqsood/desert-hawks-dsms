@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 
 const DRAFT_INVOICE_ID = "90000000-0000-0000-0000-000000000001";
+const VENDOR_BILL_ACCOUNT_ID = "50000000-0000-0000-0000-000000000300";
 
 async function signIn(page: Page, email: string) {
   await page.goto("/login");
@@ -277,4 +278,72 @@ test("least-privilege Vendor manager creates, edits, and searches Vendor master 
   await page.getByLabel("Search").fill("Updated Supplier");
   await page.getByRole("button", { name: "Apply" }).click();
   await expect(page.getByRole("link", { name: "V-E2E-001" })).toBeVisible();
+});
+
+test("least-privilege Bill author completes draft Vendor Bill authoring", async ({
+  page,
+}) => {
+  await signIn(page, "billauthor@example.test");
+  const session = await (await page.request.get("/api/auth/session")).json();
+  expect(session.permissions).not.toContain("finance.manage_procurement");
+  expect(session.permissions).not.toContain("finance.manage_chart_of_accounts");
+  expect(session.permissions).not.toContain("finance.approve_finance");
+
+  await page.getByRole("link", { name: "Vendor Bills" }).click();
+  await page.getByRole("link", { name: "New Vendor Bill" }).click();
+  await page.getByLabel("Internal Bill Reference").fill("BILL-E2E-001");
+  await page.getByLabel("Supplier Invoice Number").fill("SUP-E2E-001");
+  await page.getByLabel("Bill date").fill("2026-09-17");
+  await page.getByLabel("Due date").fill("2026-10-17");
+  const vendorSelect = page.getByRole("combobox", {
+    name: "Vendor",
+    exact: true,
+  });
+  await vendorSelect.selectOption({
+    label: "V-E2E-001 — E2E Updated Supplier",
+  });
+  await expect(vendorSelect).toHaveValue(
+    "80000000-0000-0000-0000-000000000001",
+  );
+  const createResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/vendor-bills") &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create draft" }).click();
+  expect((await createResponse).status()).toBe(201);
+  await expect(page).toHaveURL(/\/vendor-bills\/81000000-.*\/edit$/);
+
+  await page.getByLabel("Description").fill("Operating supplies");
+  await page.getByLabel("Quantity").fill("2.0000");
+  await page.getByLabel("Unit price").fill("100.00");
+  await page.getByLabel("Tax amount").fill("20.00");
+  await page
+    .getByLabel("Expense / asset account")
+    .selectOption(VENDOR_BILL_ACCOUNT_ID);
+  await page.getByRole("button", { name: "Add line" }).click();
+  await expect(page.getByText("220.00").first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Quantity").fill("3.0000");
+  await page.getByRole("button", { name: "Save line" }).click();
+  await expect(page.getByText("320.00").first()).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByText("No line items yet.")).toBeVisible();
+
+  await page.getByLabel("Description").fill("Replacement supplies");
+  await page.getByLabel("Quantity").fill("1.0000");
+  await page.getByLabel("Unit price").fill("100.00");
+  await page.getByLabel("Tax amount").fill("20.00");
+  await page
+    .getByLabel("Expense / asset account")
+    .selectOption(VENDOR_BILL_ACCOUNT_ID);
+  await page.getByRole("button", { name: "Add line" }).click();
+  await page.getByLabel("Due date").fill("2026-10-31");
+  await page.getByRole("button", { name: "Save header" }).click();
+  await expect(page).toHaveURL(/\/vendor-bills\/81000000-/);
+  await expect(page.getByText("SUP-E2E-001")).toBeVisible();
+  await expect(page.getByText("2026-10-31")).toBeVisible();
+  await expect(page.getByText("120.00").first()).toBeVisible();
 });
