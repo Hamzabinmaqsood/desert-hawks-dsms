@@ -5,6 +5,7 @@ from uuid import UUID
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models, transaction
 from django.http import FileResponse
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -49,6 +50,11 @@ from ..procurement_models import (
     PurchaseRequisition,
     Vendor,
     VendorBill,
+)
+from ..tenant_queries import (
+    tenant_consistent_payment_vouchers,
+    tenant_consistent_vendor_bills,
+    tenant_consistent_vendors,
 )
 from ..vendor_bill_services import validate_vendor_bill_header
 from .vendor_serializers import vendor_account_error
@@ -141,6 +147,17 @@ def object_company(obj: models.Model) -> Any:
     raise PermissionDenied("This resource does not expose a company scope.")
 
 
+def tenant_consistent_queryset(model: type[models.Model]) -> models.QuerySet[Any]:
+    queryset = cast(models.QuerySet[Any], cast(Any, model).objects.all())
+    if model is VendorBill:
+        queryset = tenant_consistent_vendor_bills(queryset)
+    elif model is PaymentVoucher:
+        queryset = tenant_consistent_payment_vouchers(queryset)
+    elif model is Vendor:
+        queryset = tenant_consistent_vendors(queryset)
+    return queryset
+
+
 class FinanceResponseSerializer(serializers.Serializer[Any]):
     """Schema marker for heterogeneous Finance workflow payloads."""
 
@@ -168,8 +185,7 @@ class DomainCollectionView(FinanceAPIView):
     @extend_schema(operation_id="finance_domain_collection_list")
     def get(self, request: Request, resource: str) -> Response:
         model, _permission, ids = self._context(request, resource)
-        manager = cast(Any, model).objects
-        items = [obj for obj in manager.all() if object_company(obj).id in ids]
+        items = [obj for obj in tenant_consistent_queryset(model) if object_company(obj).id in ids]
         return Response(serializer_for(model)(items, many=True).data)
 
     @transaction.atomic
@@ -236,7 +252,7 @@ class DomainDetailView(FinanceAPIView):
             raise ValidationError({"resource": ["Unknown finance resource."]})
         permission = PERMISSIONS[resource]
         self.permission_code = permission
-        item = model.objects.get(pk=pk)  # type: ignore[attr-defined]
+        item = get_object_or_404(tenant_consistent_queryset(model), pk=pk)
         if not access.has_permission(
             user=cast(User, request.user), permission=permission, company=object_company(item)
         ):
@@ -377,7 +393,7 @@ class FinanceActionView(FinanceAPIView):
         model = DOMAIN_MODELS.get(resource)
         if model is None:
             raise ValidationError({"resource": ["Unknown finance resource."]})
-        item = cast(Any, model).objects.get(pk=pk)
+        item = get_object_or_404(tenant_consistent_queryset(model), pk=pk)
         permission = PERMISSIONS[resource]
         if not access.has_permission(
             user=cast(User, request.user),

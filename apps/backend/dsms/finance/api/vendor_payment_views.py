@@ -15,6 +15,7 @@ from ..enums import AccountType, PaymentStatus, WorkflowStatus
 from ..exceptions import FinanceError, to_error_dict
 from ..models import Account
 from ..procurement_models import PaymentVoucher, VendorBill
+from ..tenant_queries import tenant_consistent_vendor_bills
 from .vendor_payment_serializers import (
     PayableVendorBillSerializer,
     PaymentAccountSerializer,
@@ -31,6 +32,20 @@ PAYMENT_REFERENCE_PERMISSIONS = (
     "finance.approve_finance",
     "finance.post_journal",
 )
+
+
+def _tenant_consistent_vendor_bills() -> Any:
+    return tenant_consistent_vendor_bills()
+
+
+def _tenant_consistent_payment_vouchers() -> Any:
+    return PaymentVoucher.objects.filter(
+        Q(vendor_bill__isnull=True)
+        | Q(
+            vendor_bill__company_id=F("company_id"),
+            vendor_bill__vendor__company_id=F("company_id"),
+        )
+    )
 
 
 class VendorPaymentPermission(BasePermission):
@@ -75,8 +90,10 @@ class VendorPaymentViewSet(viewsets.ModelViewSet[PaymentVoucher]):
         ids = access.get_fully_accessible_company_ids(
             cast(User, self.request.user), permission=self._permission()
         )
-        return PaymentVoucher.objects.filter(company_id__in=ids).select_related(
-            "vendor_bill__vendor"
+        return (
+            _tenant_consistent_payment_vouchers()
+            .filter(company_id__in=ids)
+            .select_related("vendor_bill__vendor")
         )
 
     def get_serializer_class(self) -> Any:
@@ -98,7 +115,9 @@ class VendorPaymentViewSet(viewsets.ModelViewSet[PaymentVoucher]):
             cast(User, request.user), permission="finance.add_paymentvoucher"
         )
         bill = get_object_or_404(
-            VendorBill.objects.select_related("vendor__payable_account").filter(company_id__in=ids),
+            _tenant_consistent_vendor_bills()
+            .select_related("vendor__payable_account")
+            .filter(company_id__in=ids),
             pk=data.pop("vendor_bill"),
         )
         try:
@@ -131,7 +150,9 @@ class VendorPaymentViewSet(viewsets.ModelViewSet[PaymentVoucher]):
         ids = access.get_fully_accessible_company_ids(
             cast(User, request.user), permission="finance.change_paymentvoucher"
         )
-        bill = get_object_or_404(VendorBill.objects.filter(company_id__in=ids), pk=bill_id)
+        bill = get_object_or_404(
+            _tenant_consistent_vendor_bills().filter(company_id__in=ids), pk=bill_id
+        )
         try:
             domain_services.validate_vendor_payment_values(
                 bill=bill, amount=data.get("amount", item.amount)
@@ -221,7 +242,8 @@ class PayableVendorBillViewSet(viewsets.ReadOnlyModelViewSet[VendorBill]):
 
     def get_queryset(self) -> Any:
         return (
-            VendorBill.objects.filter(
+            _tenant_consistent_vendor_bills()
+            .filter(
                 company_id__in=_reference_company_ids(cast(User, self.request.user)),
                 status__in=[WorkflowStatus.POSTED, WorkflowStatus.PARTIALLY_PAID],
                 total_amount__gt=F("paid_amount"),

@@ -10,8 +10,10 @@ from rest_framework.test import APIClient
 
 from dsms.finance import services
 from dsms.finance.enums import AccountType, MatchType, ReceiptType, WorkflowStatus
+from dsms.finance.models import JournalEntry
 from dsms.finance.operations_models import FinanceApprovalHistory, FinanceAttachment
 from dsms.finance.procurement_models import (
+    PaymentVoucher,
     PurchaseOrder,
     PurchaseOrderLine,
     PurchaseReceipt,
@@ -20,6 +22,7 @@ from dsms.finance.procurement_models import (
     PurchaseRequisitionLine,
     Vendor,
     VendorBill,
+    VendorBillLine,
 )
 from dsms.identity.enums import AccessScopeType
 from dsms.identity.models import User
@@ -187,6 +190,349 @@ def test_bill_crud_scope_permissions_and_server_owned_fields() -> None:
     assert client.get(f"/api/v1/finance/vendor-bills/{hidden.id}/").status_code == 404
     assert client.patch(f"/api/v1/finance/vendor-bills/{hidden.id}/", {}).status_code == 404
     assert not user.has_perm("finance.manage_procurement")
+
+
+@pytest.mark.parametrize("multi_company_access", [False, True])
+def test_bill_payment_history_enforces_parent_company(
+    multi_company_access: bool,
+) -> None:
+    company_a, company_b = graph(), graph()
+    bill = VendorBill.objects.create(
+        company=company_a["company"],
+        vendor=company_a["vendor"],
+        vendor_invoice_number="TENANT-HISTORY",
+        bill_number="TENANT-HISTORY",
+        bill_date=date(2026, 9, 1),
+        due_date=date(2026, 10, 1),
+        status=WorkflowStatus.POSTED,
+        subtotal=Decimal("100.00"),
+        total_amount=Decimal("100.00"),
+        created_by=company_a["maker"],
+    )
+    valid = PaymentVoucher.objects.create(
+        company=company_a["company"],
+        vendor_bill=bill,
+        voucher_number="PV-TENANT-A",
+        payment_date=date(2026, 9, 2),
+        amount=Decimal("25.00"),
+        payment_reference="VISIBLE-A",
+        created_by=company_a["maker"],
+    )
+    corrupt = PaymentVoucher.objects.create(
+        company=company_b["company"],
+        vendor_bill=bill,
+        voucher_number="PV-TENANT-B-CORRUPT",
+        payment_date=date(2026, 9, 3),
+        amount=Decimal("75.00"),
+        payment_reference="HIDDEN-B",
+        created_by=company_b["maker"],
+    )
+    user = UserFactory.create()
+    grant(user, company_a["company"], "view_vendorbill")
+    if multi_company_access:
+        grant(user, company_b["company"], "view_vendorbill")
+
+    result = api(user).get(f"/api/v1/finance/vendor-bills/{bill.id}/")
+
+    assert result.status_code == 200
+    assert result.data["payments"] == [
+        {
+            "id": str(valid.id),
+            "voucher_number": "PV-TENANT-A",
+            "payment_date": "2026-09-02",
+            "amount": "25.00",
+            "status": WorkflowStatus.DRAFT,
+            "payment_status": "PENDING",
+            "payment_reference": "VISIBLE-A",
+        }
+    ]
+    serialized = str(result.data)
+    assert str(corrupt.id) not in serialized
+    assert corrupt.voucher_number not in serialized
+    assert corrupt.payment_reference not in serialized
+
+
+@pytest.mark.parametrize("multi_company_access", [False, True])
+def test_bill_lines_enforce_parent_company(multi_company_access: bool) -> None:
+    company_a, company_b = graph(), graph()
+    company_b["accounts"]["expense"].code = "B-5000"
+    company_b["accounts"]["expense"].name = "Foreign Expense"
+    company_b["accounts"]["expense"].save(update_fields=["code", "name"])
+    bill = VendorBill.objects.create(
+        company=company_a["company"],
+        vendor=company_a["vendor"],
+        vendor_invoice_number="TENANT-LINES",
+        bill_number="TENANT-LINES",
+        bill_date=date(2026, 9, 1),
+        due_date=date(2026, 10, 1),
+        created_by=company_a["maker"],
+    )
+    valid = VendorBillLine.objects.create(
+        vendor_bill=bill,
+        purchase_order_line=company_a["po_line"],
+        receipt_line=company_a["receipt_line"],
+        description="Visible same-company line",
+        quantity=Decimal("1.0000"),
+        unit_price=Decimal("100.00"),
+        tax_amount=Decimal("10.00"),
+        expense_account=company_a["accounts"]["expense"],
+    )
+    foreign_account = VendorBillLine.objects.create(
+        vendor_bill=bill,
+        description="Hidden foreign account",
+        quantity=1,
+        unit_price=1,
+        expense_account=company_b["accounts"]["expense"],
+    )
+    foreign_po = VendorBillLine.objects.create(
+        vendor_bill=bill,
+        purchase_order_line=company_b["po_line"],
+        description="Hidden foreign PO line",
+        quantity=1,
+        unit_price=1,
+        expense_account=company_a["accounts"]["expense"],
+    )
+    foreign_receipt = VendorBillLine.objects.create(
+        vendor_bill=bill,
+        receipt_line=company_b["receipt_line"],
+        description="Hidden foreign receipt line",
+        quantity=1,
+        unit_price=1,
+        expense_account=company_a["accounts"]["expense"],
+    )
+    user = UserFactory.create()
+    grant(user, company_a["company"], "view_vendorbill")
+    if multi_company_access:
+        grant(user, company_b["company"], "view_vendorbill")
+
+    result = api(user).get(f"/api/v1/finance/vendor-bills/{bill.id}/")
+
+    assert result.status_code == 200
+    assert result.data["lines"] == [
+        {
+            "id": str(valid.id),
+            "purchase_order_line": company_a["po_line"].id,
+            "receipt_line": company_a["receipt_line"].id,
+            "description": "Visible same-company line",
+            "quantity": "1.0000",
+            "unit_price": "100.00",
+            "tax_amount": "10.00",
+            "line_total": "110.00",
+            "expense_account": company_a["accounts"]["expense"].id,
+            "expense_account_code": "5000",
+            "expense_account_name": "Expense",
+        }
+    ]
+    serialized = str(result.data)
+    for corrupt in (foreign_account, foreign_po, foreign_receipt):
+        assert str(corrupt.id) not in serialized
+        assert corrupt.description not in serialized
+    assert str(company_b["accounts"]["expense"].id) not in serialized
+    assert company_b["accounts"]["expense"].code not in serialized
+    assert company_b["accounts"]["expense"].name not in serialized
+    assert str(company_b["po_line"].id) not in serialized
+    assert str(company_b["receipt_line"].id) not in serialized
+
+
+@pytest.mark.parametrize("multi_company_access", [False, True])
+def test_bill_vendor_enforces_parent_company(multi_company_access: bool) -> None:
+    company_a, company_b = graph(), graph()
+    company_a["vendor"].code = "V-A"
+    company_a["vendor"].name = "Visible Vendor A"
+    company_a["vendor"].save(update_fields=["code", "name"])
+    company_b["vendor"].code = "V-B-FOREIGN"
+    company_b["vendor"].name = "Hidden Vendor B"
+    company_b["vendor"].save(update_fields=["code", "name"])
+    valid = VendorBill.objects.create(
+        company=company_a["company"],
+        vendor=company_a["vendor"],
+        vendor_invoice_number="TENANT-VENDOR-VALID",
+        bill_number="TENANT-VENDOR-VALID",
+        bill_date=date(2026, 9, 1),
+        due_date=date(2026, 10, 1),
+        created_by=company_a["maker"],
+    )
+    corrupt = VendorBill.objects.create(
+        company=company_a["company"],
+        vendor=company_b["vendor"],
+        vendor_invoice_number="TENANT-VENDOR-CORRUPT",
+        bill_number="TENANT-VENDOR-CORRUPT",
+        bill_date=date(2026, 9, 1),
+        due_date=date(2026, 10, 1),
+        created_by=company_a["maker"],
+    )
+    user = UserFactory.create()
+    grant(user, company_a["company"], "view_vendorbill", "manage_procurement")
+    if multi_company_access:
+        grant(user, company_b["company"], "view_vendorbill", "manage_procurement")
+    client = api(user)
+
+    valid_detail = client.get(f"/api/v1/finance/vendor-bills/{valid.id}/")
+    corrupt_detail = client.get(f"/api/v1/finance/vendor-bills/{corrupt.id}/")
+    listed = client.get("/api/v1/finance/vendor-bills/")
+    legacy_detail = client.get(f"/api/v1/finance/domain/vendor-bills/{corrupt.id}/")
+    legacy_list = client.get("/api/v1/finance/domain/vendor-bills/")
+
+    assert valid_detail.status_code == 200
+    assert valid_detail.data["vendor"] == company_a["vendor"].id
+    assert valid_detail.data["vendor_code"] == "V-A"
+    assert valid_detail.data["vendor_name"] == "Visible Vendor A"
+    assert corrupt_detail.status_code == 404
+    assert [row["id"] for row in listed.data["results"]] == [str(valid.id)]
+    assert legacy_detail.status_code == 404
+    assert [row["id"] for row in legacy_list.data] == [str(valid.id)]
+    serialized = (
+        str(listed.data)
+        + str(corrupt_detail.data)
+        + str(legacy_list.data)
+        + str(legacy_detail.data)
+    )
+    assert str(company_b["vendor"].id) not in serialized
+    assert company_b["vendor"].code not in serialized
+    assert company_b["vendor"].name not in serialized
+
+
+@pytest.mark.parametrize("multi_company_access", [False, True])
+def test_bill_purchase_order_enforces_parent_company(multi_company_access: bool) -> None:
+    company_a, company_b = graph(), graph()
+    common = {
+        "company": company_a["company"],
+        "vendor": company_a["vendor"],
+        "bill_date": date(2026, 9, 1),
+        "due_date": date(2026, 10, 1),
+        "status": WorkflowStatus.POSTED,
+        "total_amount": Decimal("100.00"),
+        "created_by": company_a["maker"],
+    }
+    valid = VendorBill.objects.create(
+        **common,
+        purchase_order=company_a["order"],
+        vendor_invoice_number="TENANT-PO-VALID",
+        bill_number="TENANT-PO-VALID",
+    )
+    without_po = VendorBill.objects.create(
+        **common,
+        purchase_order=None,
+        vendor_invoice_number="TENANT-PO-NULL",
+        bill_number="TENANT-PO-NULL",
+    )
+    corrupt = VendorBill.objects.create(
+        **common,
+        purchase_order=company_b["order"],
+        vendor_invoice_number="TENANT-PO-CORRUPT",
+        bill_number="TENANT-PO-CORRUPT",
+    )
+    user = UserFactory.create()
+    grant(
+        user,
+        company_a["company"],
+        "view_vendorbill",
+        "manage_procurement",
+        "view_paymentvoucher",
+    )
+    if multi_company_access:
+        grant(
+            user,
+            company_b["company"],
+            "view_vendorbill",
+            "manage_procurement",
+            "view_paymentvoucher",
+        )
+    client = api(user)
+
+    valid_detail = client.get(f"/api/v1/finance/vendor-bills/{valid.id}/")
+    corrupt_detail = client.get(f"/api/v1/finance/vendor-bills/{corrupt.id}/")
+    listed = client.get("/api/v1/finance/vendor-bills/")
+    legacy_detail = client.get(f"/api/v1/finance/domain/vendor-bills/{corrupt.id}/")
+    legacy_list = client.get("/api/v1/finance/domain/vendor-bills/")
+    payable = client.get("/api/v1/finance/ap-reference/payable-bills/")
+
+    expected_ids = {str(valid.id), str(without_po.id)}
+    assert valid_detail.status_code == 200
+    assert valid_detail.data["purchase_order"] == company_a["order"].id
+    assert client.get(f"/api/v1/finance/vendor-bills/{without_po.id}/").status_code == 200
+    assert corrupt_detail.status_code == 404
+    assert {row["id"] for row in listed.data["results"]} == expected_ids
+    assert legacy_detail.status_code == 404
+    assert {row["id"] for row in legacy_list.data} == expected_ids
+    assert {row["id"] for row in payable.data} == expected_ids
+    serialized = str(listed.data) + str(legacy_list.data) + str(payable.data)
+    assert str(corrupt.id) not in serialized
+    assert str(company_b["order"].id) not in serialized
+
+
+@pytest.mark.parametrize("multi_company_access", [False, True])
+def test_legacy_bill_journal_enforces_parent_company(multi_company_access: bool) -> None:
+    company_a, company_b = graph(), graph()
+    journal_a = JournalEntry.objects.create(
+        company=company_a["company"],
+        fiscal_year=company_a["_year"],
+        accounting_period=company_a["_period"],
+        journal_number="JV-BILL-TENANT-A",
+        entry_date=date(2026, 9, 1),
+        description="Visible Bill journal",
+        created_by=company_a["maker"],
+    )
+    journal_b = JournalEntry.objects.create(
+        company=company_b["company"],
+        fiscal_year=company_b["_year"],
+        accounting_period=company_b["_period"],
+        journal_number="JV-BILL-TENANT-B",
+        entry_date=date(2026, 9, 1),
+        description="Hidden foreign Bill journal",
+        created_by=company_b["maker"],
+    )
+    common = {
+        "company": company_a["company"],
+        "vendor": company_a["vendor"],
+        "bill_date": date(2026, 9, 1),
+        "due_date": date(2026, 10, 1),
+        "created_by": company_a["maker"],
+    }
+    without_journal = VendorBill.objects.create(
+        **common,
+        vendor_invoice_number="BILL-JOURNAL-NULL",
+        bill_number="BILL-JOURNAL-NULL",
+    )
+    same_company = VendorBill.objects.create(
+        **common,
+        journal_entry=journal_a,
+        vendor_invoice_number="BILL-JOURNAL-VALID",
+        bill_number="BILL-JOURNAL-VALID",
+    )
+    corrupt = VendorBill.objects.create(
+        **common,
+        journal_entry=journal_b,
+        vendor_invoice_number="BILL-JOURNAL-CORRUPT",
+        bill_number="BILL-JOURNAL-CORRUPT",
+    )
+    user = UserFactory.create()
+    grant(user, company_a["company"], "view_vendorbill", "manage_procurement")
+    if multi_company_access:
+        grant(user, company_b["company"], "view_vendorbill", "manage_procurement")
+    client = api(user)
+
+    listed = client.get("/api/v1/finance/domain/vendor-bills/")
+    null_detail = client.get(f"/api/v1/finance/domain/vendor-bills/{without_journal.id}/")
+    valid_detail = client.get(f"/api/v1/finance/domain/vendor-bills/{same_company.id}/")
+    corrupt_detail = client.get(f"/api/v1/finance/domain/vendor-bills/{corrupt.id}/")
+    corrupt_action = client.post(
+        f"/api/v1/finance/domain/vendor-bills/{corrupt.id}/submit/", {}, format="json"
+    )
+    dedicated_detail = client.get(f"/api/v1/finance/vendor-bills/{corrupt.id}/")
+
+    expected_ids = {str(without_journal.id), str(same_company.id)}
+    assert {row["id"] for row in listed.data} == expected_ids
+    assert null_detail.status_code == 200
+    assert null_detail.data["journal_entry"] is None
+    assert valid_detail.status_code == 200
+    assert valid_detail.data["journal_entry"] == journal_a.id
+    assert corrupt_detail.status_code == 404
+    assert corrupt_action.status_code == 404
+    assert str(corrupt.id) not in str(listed.data)
+    assert str(journal_b.id) not in str(listed.data)
+    assert dedicated_detail.status_code == 200
+    assert "journal_entry" not in dedicated_detail.data
 
 
 def test_generated_bill_and_line_permissions_are_enforced() -> None:

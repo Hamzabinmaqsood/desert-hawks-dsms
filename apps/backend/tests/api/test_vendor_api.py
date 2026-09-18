@@ -220,3 +220,44 @@ def test_duplicate_vendor_code_has_field_error() -> None:
     )
     assert response.status_code == 400
     assert response.data["code"] == ["A vendor with this code already exists."]
+
+
+@pytest.mark.parametrize("multi_company_access", [False, True])
+def test_vendor_payable_account_read_enforces_vendor_company(
+    multi_company_access: bool,
+) -> None:
+    company_a, company_b = CompanyFactory.create(), CompanyFactory.create()
+    _ay, _ap, accounts_a = accounting_setup(company_a)
+    _by, _bp, accounts_b = accounting_setup(company_b)
+    accounts_b["payable"].code = "B-2000"
+    accounts_b["payable"].name = "Hidden Foreign Payable"
+    accounts_b["payable"].save(update_fields=["code", "name"])
+    valid = Vendor.objects.create(
+        company=company_a,
+        code="V-VALID",
+        name="Visible Vendor",
+        payable_account=accounts_a["payable"],
+    )
+    corrupt = Vendor.objects.create(
+        company=company_a,
+        code="V-CORRUPT",
+        name="Hidden Corrupt Vendor",
+        payable_account=accounts_b["payable"],
+    )
+    user = UserFactory.create()
+    grant(user, company_a, "view_vendor", "manage_procurement")
+    if multi_company_access:
+        grant(user, company_b, "view_vendor", "manage_procurement")
+    api = client(user)
+
+    dedicated = api.get("/api/v1/finance/vendors/")
+    legacy = api.get("/api/v1/finance/domain/vendors/")
+
+    assert [row["id"] for row in dedicated.data["results"]] == [str(valid.id)]
+    assert [row["id"] for row in legacy.data] == [str(valid.id)]
+    assert api.get(f"/api/v1/finance/vendors/{corrupt.id}/").status_code == 404
+    assert api.get(f"/api/v1/finance/domain/vendors/{corrupt.id}/").status_code == 404
+    serialized = str(dedicated.data) + str(legacy.data)
+    assert str(accounts_b["payable"].id) not in serialized
+    assert accounts_b["payable"].code not in serialized
+    assert accounts_b["payable"].name not in serialized

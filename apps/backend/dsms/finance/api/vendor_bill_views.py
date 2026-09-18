@@ -3,6 +3,7 @@ from uuid import UUID
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import F, Prefetch, Q
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -18,7 +19,7 @@ from ..enums import ApprovalDocumentType, WorkflowStatus
 from ..exceptions import FinanceError, to_error_dict
 from ..models import Account
 from ..operations_models import FinanceAttachment
-from ..procurement_models import VendorBill, VendorBillLine
+from ..procurement_models import PaymentVoucher, VendorBill, VendorBillLine
 from ..vendor_bill_services import (
     ALLOWED_VENDOR_BILL_ACCOUNT_TYPES,
     add_vendor_bill_line,
@@ -119,9 +120,41 @@ class VendorBillViewSet(viewsets.ModelViewSet[VendorBill]):
         ids = access.get_fully_accessible_company_ids(
             cast(User, self.request.user), permission=self._permission()
         )
-        queryset = VendorBill.objects.filter(company_id__in=ids).select_related("vendor")
+        queryset = (
+            VendorBill.objects.filter(company_id__in=ids, vendor__company_id=F("company_id"))
+            .filter(Q(purchase_order__isnull=True) | Q(purchase_order__company_id=F("company_id")))
+            .select_related("vendor")
+        )
         if self.action == "retrieve":
-            queryset = queryset.prefetch_related("lines__expense_account", "payment_vouchers")
+            queryset = queryset.prefetch_related(
+                Prefetch(
+                    "lines",
+                    queryset=(
+                        VendorBillLine.objects.filter(
+                            expense_account__company_id=F("vendor_bill__company_id")
+                        )
+                        .filter(
+                            Q(purchase_order_line__isnull=True)
+                            | Q(
+                                purchase_order_line__purchase_order__company_id=F(
+                                    "vendor_bill__company_id"
+                                )
+                            )
+                        )
+                        .filter(
+                            Q(receipt_line__isnull=True)
+                            | Q(receipt_line__receipt__company_id=F("vendor_bill__company_id"))
+                        )
+                        .select_related("expense_account")
+                    ),
+                ),
+                Prefetch(
+                    "payment_vouchers",
+                    queryset=PaymentVoucher.objects.filter(
+                        company_id=F("vendor_bill__company_id")
+                    ).order_by("payment_date", "created_at"),
+                ),
+            )
         return queryset
 
     def get_serializer_class(self) -> Any:

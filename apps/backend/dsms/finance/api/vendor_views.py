@@ -14,6 +14,7 @@ from ..enums import AccountType
 from ..models import Account
 from ..payment_models import PaymentAccountingProfile
 from ..procurement_models import Vendor
+from ..tenant_queries import tenant_consistent_vendors
 from .vendor_serializers import VendorPayableAccountSerializer, VendorSerializer
 
 VENDOR_REFERENCE_PERMISSIONS = (
@@ -54,7 +55,9 @@ class VendorViewSet(viewsets.ModelViewSet[Vendor]):
         ids = access.get_fully_accessible_company_ids(
             cast(User, self.request.user), permission=permission
         )
-        return Vendor.objects.filter(company_id__in=ids).select_related("payable_account")
+        return tenant_consistent_vendors(Vendor.objects.filter(company_id__in=ids)).select_related(
+            "payable_account"
+        )
 
     def perform_create(self, serializer: BaseSerializer[Vendor]) -> None:
         vendor_serializer = cast(VendorSerializer, serializer)

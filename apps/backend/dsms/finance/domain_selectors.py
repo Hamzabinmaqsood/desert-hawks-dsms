@@ -36,6 +36,11 @@ from .procurement_models import (
     Vendor,
     VendorBill,
 )
+from .tenant_queries import (
+    tenant_consistent_payment_vouchers,
+    tenant_consistent_vendor_bills,
+    tenant_consistent_vendors,
+)
 
 ZERO = Decimal("0.00")
 MONEY_FIELD: Any = DecimalField(max_digits=18, decimal_places=2)
@@ -118,8 +123,8 @@ def balance_sheet(*, company_id: Any, date_to: date) -> dict[str, Decimal]:
 
 def accounts_payable_aging(*, company_id: Any, as_of: date) -> list[dict[str, Any]]:
     rows = []
-    for bill in VendorBill.objects.filter(
-        company_id=company_id, total_amount__gt=F("paid_amount")
+    for bill in tenant_consistent_vendor_bills(
+        VendorBill.objects.filter(company_id=company_id, total_amount__gt=F("paid_amount"))
     ).select_related("vendor"):
         days = max((as_of - bill.due_date).days, 0)
         bucket = (
@@ -426,16 +431,20 @@ REPORT_QUERYSETS = {
     "employee-advance-register": lambda company_id: EmployeeAdvance.objects.filter(
         employee__company_id=company_id
     ),
-    "vendor-register": lambda company_id: Vendor.objects.filter(company_id=company_id),
+    "vendor-register": lambda company_id: tenant_consistent_vendors(
+        Vendor.objects.filter(company_id=company_id)
+    ),
     "vendor-ledger": lambda company_id: (
-        VendorBill.objects.filter(company_id=company_id)
+        tenant_consistent_vendor_bills(VendorBill.objects.filter(company_id=company_id))
         .values("vendor__code", "vendor__name")
         .annotate(billed=Sum("total_amount"), paid=Sum("paid_amount"))
     ),
-    "outstanding-bills": lambda company_id: VendorBill.objects.filter(
-        company_id=company_id, total_amount__gt=F("paid_amount")
+    "outstanding-bills": lambda company_id: tenant_consistent_vendor_bills(
+        VendorBill.objects.filter(company_id=company_id, total_amount__gt=F("paid_amount"))
     ),
-    "payment-register": lambda company_id: PaymentVoucher.objects.filter(company_id=company_id),
+    "payment-register": lambda company_id: tenant_consistent_payment_vouchers(
+        PaymentVoucher.objects.filter(company_id=company_id)
+    ),
     "purchase-requisition-register": lambda company_id: PurchaseRequisition.objects.filter(
         company_id=company_id
     ),

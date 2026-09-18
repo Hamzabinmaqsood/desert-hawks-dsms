@@ -3,6 +3,7 @@ from typing import Any, cast
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import Prefetch
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -39,6 +40,12 @@ from ..payment_services import (
 )
 from ..payroll_models import PayrollRun
 from ..procurement_models import PaymentVoucher, Vendor
+from ..tenant_queries import (
+    tenant_consistent_payment_batches,
+    tenant_consistent_payment_beneficiaries,
+    tenant_consistent_payment_instructions,
+    tenant_consistent_payment_settlements,
+)
 from .payment_serializers import (
     DestinationRequestSerializer,
     ManualPaymentSuccessSerializer,
@@ -111,7 +118,9 @@ class PaymentBeneficiaryViewSet(PaymentScopedViewSet):
     }
 
     def get_queryset(self) -> Any:
-        return PaymentBeneficiaryProfile.objects.filter(company_id__in=self.company_ids())
+        return tenant_consistent_payment_beneficiaries(
+            PaymentBeneficiaryProfile.objects.filter(company_id__in=self.company_ids())
+        )
 
     def list(self, request: Request) -> Response:
         return Response(self.get_serializer(self.get_queryset(), many=True).data)
@@ -164,8 +173,10 @@ class PaymentBatchViewSet(PaymentScopedViewSet):
     }
 
     def get_queryset(self) -> Any:
-        return PaymentBatch.objects.filter(company_id__in=self.company_ids()).prefetch_related(
-            "instructions"
+        return tenant_consistent_payment_batches(
+            PaymentBatch.objects.filter(company_id__in=self.company_ids())
+        ).prefetch_related(
+            Prefetch("instructions", queryset=tenant_consistent_payment_instructions())
         )
 
     def list(self, request: Request) -> Response:
@@ -225,7 +236,9 @@ class PaymentInstructionViewSet(PaymentScopedViewSet):
     }
 
     def get_queryset(self) -> Any:
-        return PaymentInstruction.objects.filter(batch__company_id__in=self.company_ids())
+        return tenant_consistent_payment_instructions(
+            PaymentInstruction.objects.filter(batch__company_id__in=self.company_ids())
+        )
 
     def list(self, request: Request) -> Response:
         return Response(self.get_serializer(self.get_queryset(), many=True).data)
@@ -262,8 +275,8 @@ class PaymentSettlementViewSet(PaymentScopedViewSet):
     action_permissions = {"reconcile": "finance.reconcile_payment_settlement"}
 
     def get_queryset(self) -> Any:
-        return PaymentProviderSettlement.objects.filter(
-            company_id__in=self.company_ids()
+        return tenant_consistent_payment_settlements(
+            PaymentProviderSettlement.objects.filter(company_id__in=self.company_ids())
         ).prefetch_related("lines")
 
     def list(self, request: Request) -> Response:
