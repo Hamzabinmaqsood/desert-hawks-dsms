@@ -42,6 +42,17 @@ export interface VendorBill {
   tax_amount?: string;
   match_exception?: string;
   lines?: VendorBillLine[];
+  payments?: VendorBillPayment[];
+}
+
+export interface VendorBillPayment {
+  id: string;
+  voucher_number: string;
+  payment_date: string;
+  amount: string;
+  status: string;
+  payment_status: string;
+  payment_reference: string;
 }
 
 export interface VendorBillPage {

@@ -121,7 +121,7 @@ class VendorBillViewSet(viewsets.ModelViewSet[VendorBill]):
         )
         queryset = VendorBill.objects.filter(company_id__in=ids).select_related("vendor")
         if self.action == "retrieve":
-            queryset = queryset.prefetch_related("lines__expense_account")
+            queryset = queryset.prefetch_related("lines__expense_account", "payment_vouchers")
         return queryset
 
     def get_serializer_class(self) -> Any:

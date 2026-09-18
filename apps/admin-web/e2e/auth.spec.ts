@@ -386,3 +386,65 @@ test("least-privilege Bill author completes draft Vendor Bill authoring", async 
   );
   expect(download.status()).toBe(200);
 });
+
+test("least-privilege payment maker and checker settle a posted Vendor Bill", async ({
+  page,
+}) => {
+  await signIn(page, "paymentmaker@example.test");
+  const makerSession = await (
+    await page.request.get("/api/auth/session")
+  ).json();
+  expect(makerSession.permissions).not.toContain("finance.approve_finance");
+  expect(makerSession.permissions).not.toContain("finance.post_journal");
+  expect(makerSession.permissions).not.toContain("finance.manage_procurement");
+  expect(makerSession.permissions).not.toContain(
+    "finance.manage_chart_of_accounts",
+  );
+
+  await page.getByRole("link", { name: "Vendor Payments" }).click();
+  await page.getByRole("link", { name: "New Vendor Payment" }).click();
+  await page
+    .getByLabel("Vendor Bill")
+    .selectOption("81000000-0000-0000-0000-000000000001");
+  await page.getByLabel("Voucher number").fill("PV-E2E-001");
+  await page.getByLabel("Payment date").fill("2026-09-18");
+  await page.getByLabel("Amount").fill("70.00");
+  await page.getByLabel("Reference").fill("MAKER-REF");
+  await page.getByRole("button", { name: "Create draft" }).click();
+  await expect(page).toHaveURL(/\/vendor-payments\/84000000-/);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Submit for approval" }).click();
+  await expect(page.getByText("SUBMITTED")).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+
+  await signIn(page, "paymentchecker@example.test");
+  const checkerSession = await (
+    await page.request.get("/api/auth/session")
+  ).json();
+  expect(checkerSession.permissions).not.toContain(
+    "finance.add_paymentvoucher",
+  );
+  expect(checkerSession.permissions).not.toContain(
+    "finance.manage_procurement",
+  );
+  expect(checkerSession.permissions).not.toContain(
+    "finance.manage_chart_of_accounts",
+  );
+  await page.goto("/vendor-payments/84000000-0000-0000-0000-000000000001");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Approve", exact: true }).click();
+  await expect(page.getByText("APPROVED")).toBeVisible();
+  await page
+    .getByLabel("Payment account")
+    .selectOption("50000000-0000-0000-0000-000000000400");
+  await page.getByLabel("Payment reference").fill("BANK-E2E-001");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Pay Vendor" }).click();
+  await expect(page.getByText("PAID")).toHaveCount(2);
+
+  await page.getByRole("link", { name: "Open Vendor Bill" }).click();
+  await expect(page.getByText("PARTIALLY PAID")).toBeVisible();
+  await expect(page.getByText("70.00").first()).toBeVisible();
+  await expect(page.getByText("50.00").first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "PV-E2E-001" })).toBeVisible();
+});

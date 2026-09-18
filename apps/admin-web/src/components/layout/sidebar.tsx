@@ -34,6 +34,11 @@ const navigation: NavigationItem[] = [
     href: "/vendor-bills",
     permissions: ["finance.view_vendorbill"],
   },
+  {
+    label: "Vendor Payments",
+    href: "/vendor-payments",
+    permissions: ["finance.view_paymentvoucher"],
+  },
 ];
 
 export function Sidebar({

@@ -8,8 +8,10 @@ from django.utils import timezone
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
 
+from . import domain_services
 from .crypto import encrypt_payment_destination
 from .enums import PaymentStatus, WorkflowStatus
+from .exceptions import FinanceValidationError
 from .models import AccountingPeriod
 from .payment_models import (
     BeneficiaryStatus,
@@ -29,7 +31,7 @@ from .payment_models import (
 )
 from .payment_providers import PaymentProviderAdapter, configured_adapter
 from .payroll_models import PayrollRun
-from .procurement_models import PaymentVoucher, VendorBill
+from .procurement_models import PaymentVoucher
 from .services import (
     approve_journal,
     create_journal,
@@ -441,15 +443,19 @@ def process_payment_instruction(
 def _apply_vendor_payment(item: PaymentInstruction) -> None:
     assert item.payment_voucher_id is not None
     voucher = PaymentVoucher.objects.select_for_update(of=("self",)).get(pk=item.payment_voucher_id)
-    for allocation in item.bill_allocations.select_related("vendor_bill"):
-        bill = VendorBill.objects.select_for_update(of=("self",)).get(pk=allocation.vendor_bill_id)
-        if allocation.amount > bill.outstanding_amount:
-            raise ValidationError("Payment allocation exceeds remaining vendor payable.")
-        bill.paid_amount = money(bill.paid_amount + allocation.amount)
-        bill.status = (
-            WorkflowStatus.PAID if bill.outstanding_amount == 0 else WorkflowStatus.PARTIALLY_PAID
-        )
-        bill.save(update_fields=["paid_amount", "status", "updated_at"])
+    if voucher.payment_status == PaymentStatus.PAID:
+        return
+    for allocation in item.bill_allocations.all():
+        if voucher.vendor_bill_id != allocation.vendor_bill_id:
+            raise ValidationError("Payment allocation must match the Voucher Vendor Bill.")
+        try:
+            domain_services.apply_vendor_bill_payment(
+                bill_id=allocation.vendor_bill_id,
+                company_id=voucher.company_id,
+                amount=allocation.amount,
+            )
+        except FinanceValidationError as exc:
+            raise ValidationError(exc.detail) from exc
     voucher.payment_status, voucher.status = PaymentStatus.PAID, WorkflowStatus.PAID
     voucher.payment_reference = item.provider_reference
     voucher.save(update_fields=["payment_status", "status", "payment_reference", "updated_at"])

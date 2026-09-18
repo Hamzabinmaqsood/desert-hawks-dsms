@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from ..models import Account
 from ..operations_models import FinanceAttachment
-from ..procurement_models import VendorBill, VendorBillLine
+from ..procurement_models import PaymentVoucher, VendorBill, VendorBillLine
 
 
 class VendorBillLineReadSerializer(serializers.ModelSerializer[VendorBillLine]):
@@ -120,8 +120,23 @@ class VendorBillListSerializer(serializers.ModelSerializer[VendorBill]):
         )
 
 
+class VendorBillPaymentSerializer(serializers.ModelSerializer[PaymentVoucher]):
+    class Meta:
+        model = PaymentVoucher
+        fields = (
+            "id",
+            "voucher_number",
+            "payment_date",
+            "amount",
+            "status",
+            "payment_status",
+            "payment_reference",
+        )
+
+
 class VendorBillDetailSerializer(VendorBillListSerializer):
     lines = VendorBillLineReadSerializer(many=True, read_only=True)
+    payments = VendorBillPaymentSerializer(source="payment_vouchers", many=True, read_only=True)
 
     class Meta:
         model = VendorBill
@@ -134,6 +149,7 @@ class VendorBillDetailSerializer(VendorBillListSerializer):
             "created_at",
             "updated_at",
             "lines",
+            "payments",
         )
 
 

@@ -12,6 +12,7 @@ from dsms.finance import domain_selectors, domain_services
 from dsms.finance.admin import ProtectedFinanceAdmin
 from dsms.finance.enums import MatchType, ReceiptType, WorkflowStatus
 from dsms.finance.exceptions import FinanceValidationError
+from dsms.finance.operations_models import CashAccount
 from dsms.finance.procurement_models import (
     PaymentVoucher,
     PurchaseOrder,
@@ -36,6 +37,9 @@ def procurement():  # type: ignore[no-untyped-def]
     company = CompanyFactory.create()
     maker, checker = UserFactory.create(), UserFactory.create()
     _year, _period, accounts = accounting_setup(company)
+    CashAccount.objects.create(
+        company=company, name="Procurement Cash", ledger_account=accounts["cash"], custodian=maker
+    )
     vendor = Vendor.objects.create(
         company=company,
         code="V-1",

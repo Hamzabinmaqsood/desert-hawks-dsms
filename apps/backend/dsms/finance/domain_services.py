@@ -34,6 +34,7 @@ from .operations_models import (
     BankStatement,
     BankStatementLine,
     Budget,
+    CashAccount,
     CompanyExpense,
     ExpenseClaim,
     FinanceApprovalHistory,
@@ -105,6 +106,78 @@ def _period_for(company_id: Any, transaction_date: date) -> AccountingPeriod:
         )
     except AccountingPeriod.DoesNotExist as exc:
         raise FinanceValidationError({"date": ["No accounting period covers this date."]}) from exc
+
+
+def validate_direct_payment_account(*, company_id: Any, account: Account) -> None:
+    errors: dict[str, list[str]] = {}
+    if account.company_id != company_id:
+        errors["payment_account"] = ["Payment account must belong to the Voucher company."]
+    elif account.account_type != "ASSET":
+        errors["payment_account"] = ["Payment account must be an asset cash or bank account."]
+    elif not account.is_active:
+        errors["payment_account"] = ["Payment account must be active."]
+    elif not account.allow_posting:
+        errors["payment_account"] = ["Payment account must allow posting."]
+    elif not (
+        CashAccount.objects.filter(
+            ledger_account=account, company_id=company_id, is_active=True
+        ).exists()
+        or BankAccount.objects.filter(
+            ledger_account=account, company_id=company_id, is_active=True
+        ).exists()
+    ):
+        errors["payment_account"] = ["Payment account must be an active cash or bank account."]
+    if errors:
+        raise FinanceValidationError(errors)
+
+
+def validate_vendor_payment_values(*, bill: VendorBill, amount: Decimal) -> None:
+    amount = money(amount)
+    if amount <= ZERO:
+        raise FinanceValidationError({"amount": ["Payment amount must be positive."]})
+    if bill.status not in {WorkflowStatus.POSTED, WorkflowStatus.PARTIALLY_PAID}:
+        raise FinanceValidationError({"vendor_bill": ["Vendor Bill is not payable."]})
+    if bill.outstanding_amount <= ZERO:
+        raise FinanceValidationError({"vendor_bill": ["Vendor Bill is already fully paid."]})
+    if amount > bill.outstanding_amount:
+        raise FinanceValidationError(
+            {"amount": ["Payment exceeds vendor bill outstanding amount."]}
+        )
+
+
+@transaction.atomic
+def apply_vendor_bill_payment(*, bill_id: Any, company_id: Any, amount: Decimal) -> VendorBill:
+    amount = money(amount)
+    bill = (
+        VendorBill.objects.select_for_update(of=("self",))
+        .select_related("vendor__payable_account")
+        .get(pk=bill_id)
+    )
+    if amount <= ZERO:
+        raise FinanceValidationError({"amount": ["Payment amount must be positive."]})
+    if bill.company_id != company_id:
+        raise FinanceValidationError({"vendor_bill": ["Vendor Bill must belong to the company."]})
+    if bill.status not in {WorkflowStatus.POSTED, WorkflowStatus.PARTIALLY_PAID}:
+        raise FinanceValidationError({"vendor_bill": ["Vendor Bill is not payable."]})
+    if bill.outstanding_amount <= ZERO:
+        raise FinanceValidationError({"vendor_bill": ["Vendor Bill is already fully paid."]})
+    if amount > bill.outstanding_amount:
+        raise FinanceValidationError(
+            {"amount": ["Payment exceeds vendor bill outstanding amount."]}
+        )
+    try:
+        validate_vendor_payable_account(company=bill.company, account=bill.vendor.payable_account)
+    except DjangoValidationError as exc:
+        detail = exc.message_dict if hasattr(exc, "message_dict") else {"vendor_bill": exc.messages}
+        raise FinanceValidationError(detail) from exc
+    bill.paid_amount = money(bill.paid_amount + amount)
+    bill.status = (
+        WorkflowStatus.PAID
+        if bill.paid_amount == money(bill.total_amount)
+        else WorkflowStatus.PARTIALLY_PAID
+    )
+    bill.save(update_fields=["paid_amount", "status", "updated_at"])
+    return bill
 
 
 def _history(
@@ -933,6 +1006,60 @@ def post_fund_transfer(*, transfer: FundTransfer, actor: User) -> FundTransfer:
     return locked
 
 
+def _validate_vendor_payment_voucher(voucher: PaymentVoucher) -> None:
+    if not voucher.vendor_bill_id:
+        raise FinanceValidationError({"vendor_bill": ["Vendor Bill is required."]})
+    bill = VendorBill.objects.select_related("vendor__payable_account").get(
+        pk=voucher.vendor_bill_id
+    )
+    if bill.company_id != voucher.company_id:
+        raise FinanceValidationError({"vendor_bill": ["Vendor Bill must belong to the company."]})
+    validate_vendor_payment_values(bill=bill, amount=voucher.amount)
+    if voucher.payment_status != PaymentStatus.PENDING:
+        raise FinanceValidationError({"payment_status": ["Voucher is not pending payment."]})
+    if voucher.journal_entry_id:
+        raise FinanceValidationError({"journal_entry": ["Voucher already has a journal."]})
+
+
+@transaction.atomic
+def submit_vendor_payment(*, voucher: PaymentVoucher, actor: User) -> PaymentVoucher:
+    locked = PaymentVoucher.objects.select_for_update(of=("self",)).get(pk=voucher.pk)
+    _validate_vendor_payment_voucher(locked)
+    return cast(
+        PaymentVoucher,
+        submit_finance_document(
+            obj=locked, actor=actor, document_type=ApprovalDocumentType.PAYMENT_VOUCHER
+        ),
+    )
+
+
+@transaction.atomic
+def approve_vendor_payment(*, voucher: PaymentVoucher, actor: User) -> PaymentVoucher:
+    locked = PaymentVoucher.objects.select_for_update(of=("self",)).get(pk=voucher.pk)
+    _validate_vendor_payment_voucher(locked)
+    return cast(
+        PaymentVoucher,
+        approve_finance_document(
+            obj=locked, actor=actor, document_type=ApprovalDocumentType.PAYMENT_VOUCHER
+        ),
+    )
+
+
+@transaction.atomic
+def reject_vendor_payment(*, voucher: PaymentVoucher, actor: User, reason: str) -> PaymentVoucher:
+    locked = PaymentVoucher.objects.select_for_update(of=("self",)).get(pk=voucher.pk)
+    _maker_checker(locked.created_by_id, actor)
+    return cast(
+        PaymentVoucher,
+        reject_finance_document(
+            obj=locked,
+            actor=actor,
+            document_type=ApprovalDocumentType.PAYMENT_VOUCHER,
+            reason=reason,
+        ),
+    )
+
+
 @transaction.atomic
 def pay_vendor_voucher(
     *, voucher: PaymentVoucher, actor: User, cash_account: Account, reference: str
@@ -946,11 +1073,12 @@ def pay_vendor_voucher(
         return locked
     if locked.status != WorkflowStatus.APPROVED or not locked.vendor_bill_id:
         raise InvalidFinanceTransitionError("An approved bill payment voucher is required.")
-    bill = VendorBill.objects.select_for_update().get(pk=locked.vendor_bill_id)
-    if locked.amount > bill.outstanding_amount:
-        raise FinanceValidationError(
-            {"amount": ["Payment exceeds vendor bill outstanding amount."]}
-        )
+    if locked.journal_entry_id:
+        raise FinanceValidationError({"journal_entry": ["Payment Voucher already has a journal."]})
+    validate_direct_payment_account(company_id=locked.company_id, account=cash_account)
+    bill = apply_vendor_bill_payment(
+        bill_id=locked.vendor_bill_id, company_id=locked.company_id, amount=locked.amount
+    )
     period = _period_for(locked.company_id, locked.payment_date)
     journal = create_journal(
         company=locked.company,
@@ -982,11 +1110,6 @@ def pay_vendor_voucher(
             "updated_at",
         ]
     )
-    bill.paid_amount = money(bill.paid_amount + locked.amount)
-    bill.status = (
-        WorkflowStatus.PAID if bill.outstanding_amount == ZERO else WorkflowStatus.PARTIALLY_PAID
-    )
-    bill.save(update_fields=["paid_amount", "status", "updated_at"])
     return locked
 
 

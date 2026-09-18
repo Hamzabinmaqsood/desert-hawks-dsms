@@ -302,7 +302,7 @@ def test_vendor_partial_payment_updates_only_allocated_payable() -> None:
         bill_number="VB-1",
         bill_date=date(2026, 8, 1),
         due_date=date(2026, 8, 31),
-        status=WorkflowStatus.APPROVED,
+        status=WorkflowStatus.POSTED,
         subtotal=Decimal("1000"),
         total_amount=Decimal("1000"),
         created_by=maker,

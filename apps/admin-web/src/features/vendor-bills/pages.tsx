@@ -731,6 +731,43 @@ function Detail({ bill }: { bill: VendorBill }) {
           <p>No line items recorded.</p>
         )}
       </section>
+      <section className="detail-card">
+        <h2>Payments</h2>
+        {bill.payments?.length ? (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Voucher #</th>
+                  <th>Payment date</th>
+                  <th>Amount</th>
+                  <th>Workflow</th>
+                  <th>Payment status</th>
+                  <th>Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bill.payments.map((payment) => (
+                  <tr key={payment.id}>
+                    <td>
+                      <Link href={`/vendor-payments/${payment.id}`}>
+                        {payment.voucher_number}
+                      </Link>
+                    </td>
+                    <td>{payment.payment_date}</td>
+                    <td>{payment.amount}</td>
+                    <td>{statusLabel(payment.status)}</td>
+                    <td>{statusLabel(payment.payment_status)}</td>
+                    <td>{payment.payment_reference || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p>No Vendor Payments recorded.</p>
+        )}
+      </section>
     </>
   );
 }

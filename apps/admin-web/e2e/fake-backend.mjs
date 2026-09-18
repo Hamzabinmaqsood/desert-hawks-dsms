@@ -115,6 +115,30 @@ const ACTORS = {
       "finance.manage_finance_attachments",
     ],
   },
+  paymentmaker: {
+    id: MAKER_ID,
+    email: "paymentmaker@example.test",
+    first_name: "Payment",
+    last_name: "Maker",
+    permissions: [
+      "finance.view_paymentvoucher",
+      "finance.add_paymentvoucher",
+      "finance.change_paymentvoucher",
+      "finance.view_vendorbill",
+    ],
+  },
+  paymentchecker: {
+    id: APPROVER_ID,
+    email: "paymentchecker@example.test",
+    first_name: "Payment",
+    last_name: "Checker",
+    permissions: [
+      "finance.view_paymentvoucher",
+      "finance.view_vendorbill",
+      "finance.approve_finance",
+      "finance.post_journal",
+    ],
+  },
 };
 
 const actorKeyForEmail = (email) => {
@@ -282,6 +306,9 @@ const VENDOR_BILL_ID = "81000000-0000-0000-0000-000000000001";
 const VENDOR_BILL_ACCOUNT_ID = "50000000-0000-0000-0000-000000000300";
 let vendorBill = null;
 let vendorBillAttachment = null;
+const VENDOR_PAYMENT_ID = "84000000-0000-0000-0000-000000000001";
+const PAYMENT_ACCOUNT_ID = "50000000-0000-0000-0000-000000000400";
+let vendorPayment = null;
 const vendorBillBody = () => ({
   ...vendorBill,
   vendor_code: vendor?.code ?? "V-E2E-001",
@@ -291,6 +318,19 @@ const vendorBillBody = () => ({
         Number(vendorBill.total_amount) - Number(vendorBill.paid_amount)
       ).toFixed(2)
     : "0.00",
+  payments: vendorPayment
+    ? [
+        {
+          id: vendorPayment.id,
+          voucher_number: vendorPayment.voucher_number,
+          payment_date: vendorPayment.payment_date,
+          amount: vendorPayment.amount,
+          status: vendorPayment.status,
+          payment_status: vendorPayment.payment_status,
+          payment_reference: vendorPayment.payment_reference,
+        },
+      ]
+    : [],
 });
 function recomputeVendorBill() {
   const lines = vendorBill?.lines ?? [];
@@ -577,6 +617,83 @@ createServer(async (request, response) => {
       next: null,
       previous: null,
       results: vendorBill ? [vendorBillBody()] : [],
+    });
+  if (path === "/api/v1/finance/ap-reference/payable-bills/")
+    return json(
+      response,
+      200,
+      vendorBill && ["POSTED", "PARTIALLY_PAID"].includes(vendorBill.status)
+        ? [vendorBillBody()]
+        : [],
+    );
+  if (path === "/api/v1/finance/ap-reference/payment-accounts/")
+    return json(response, 200, [
+      {
+        id: PAYMENT_ACCOUNT_ID,
+        code: "1100",
+        name: "Operating Bank",
+        account_type: "ASSET",
+      },
+    ]);
+  if (
+    path === "/api/v1/finance/vendor-payments/" &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    vendorPayment = {
+      id: VENDOR_PAYMENT_ID,
+      ...body,
+      bill_number: vendorBill.bill_number,
+      vendor_name: vendor?.name ?? "E2E Updated Supplier",
+      status: "DRAFT",
+      payment_status: "PENDING",
+    };
+    return json(response, 201, vendorPayment);
+  }
+  if (path === `/api/v1/finance/vendor-payments/${VENDOR_PAYMENT_ID}/`)
+    return vendorPayment
+      ? json(response, 200, vendorPayment)
+      : json(response, 404, { detail: "Not found" });
+  for (const [action, target] of [
+    ["submit", "SUBMITTED"],
+    ["approve", "APPROVED"],
+    ["reject", "REJECTED"],
+  ]) {
+    if (
+      path ===
+        `/api/v1/finance/vendor-payments/${VENDOR_PAYMENT_ID}/${action}/` &&
+      request.method === "POST"
+    ) {
+      vendorPayment.status = target;
+      return json(response, 200, vendorPayment);
+    }
+  }
+  if (
+    path === `/api/v1/finance/vendor-payments/${VENDOR_PAYMENT_ID}/pay/` &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    vendorPayment.status = "PAID";
+    vendorPayment.payment_status = "PAID";
+    vendorPayment.payment_reference = body.payment_reference ?? "";
+    vendorBill.paid_amount = (
+      Number(vendorBill.paid_amount) + Number(vendorPayment.amount)
+    ).toFixed(2);
+    vendorBill.status =
+      Number(vendorBill.paid_amount) === Number(vendorBill.total_amount)
+        ? "PAID"
+        : "PARTIALLY_PAID";
+    return json(response, 200, vendorPayment);
+  }
+  if (
+    path === "/api/v1/finance/vendor-payments/" ||
+    path?.startsWith("/api/v1/finance/vendor-payments/?")
+  )
+    return json(response, 200, {
+      count: vendorPayment ? 1 : 0,
+      next: null,
+      previous: null,
+      results: vendorPayment ? [vendorPayment] : [],
     });
   if (path === "/api/v1/billing/billing-profiles/?is_active=true") {
     return json(response, 200, {

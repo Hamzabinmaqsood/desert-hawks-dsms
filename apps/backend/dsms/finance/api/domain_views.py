@@ -192,6 +192,16 @@ class DomainCollectionView(FinanceAPIView):
                 )
             except DjangoValidationError as exc:
                 raise ValidationError(exc.message_dict) from exc
+        if model is PaymentVoucher:
+            bill = serializer.validated_data.get("vendor_bill")
+            if bill is None or bill.company_id != serializer.validated_data["company"].id:
+                raise ValidationError({"vendor_bill": ["Vendor Bill must belong to the company."]})
+            try:
+                domain_services.validate_vendor_payment_values(
+                    bill=bill, amount=serializer.validated_data["amount"]
+                )
+            except FinanceError as exc:
+                raise ValidationError(to_error_dict(exc)) from exc
         model_fields = {field.name for field in model._meta.fields}
         extras: dict[str, Any] = {}
         if "created_by" in model_fields:
@@ -398,6 +408,20 @@ class FinanceActionView(FinanceAPIView):
             elif resource == "vendor-bills" and action == "reject":
                 result = domain_services.reject_vendor_bill(
                     bill=item,
+                    actor=cast(User, request.user),
+                    reason=str(request.data.get("reason", "")),
+                )
+            elif resource == "payment-vouchers" and action == "submit":
+                result = domain_services.submit_vendor_payment(
+                    voucher=item, actor=cast(User, request.user)
+                )
+            elif resource == "payment-vouchers" and action == "approve":
+                result = domain_services.approve_vendor_payment(
+                    voucher=item, actor=cast(User, request.user)
+                )
+            elif resource == "payment-vouchers" and action == "reject":
+                result = domain_services.reject_vendor_payment(
+                    voucher=item,
                     actor=cast(User, request.user),
                     reason=str(request.data.get("reason", "")),
                 )
