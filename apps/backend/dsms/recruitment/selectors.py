@@ -6,16 +6,16 @@ from .enums import ApplicationStatus, OfferStatus, OnboardingStatus, VacancyStat
 from .models import CandidateApplication, EmploymentOffer, OnboardingCase, Vacancy
 
 
-def recruitment_summary(*, company_id: str | None = None) -> dict[str, int]:
+def recruitment_summary(*, company_ids: list[Any] | None = None) -> dict[str, int]:
     applications = CandidateApplication.objects.all()
     vacancies = Vacancy.objects.all()
     offers = EmploymentOffer.objects.all()
     onboarding = OnboardingCase.objects.all()
-    if company_id:
-        applications = applications.filter(company_id=company_id)
-        vacancies = vacancies.filter(company_id=company_id)
-        offers = offers.filter(company_id=company_id)
-        onboarding = onboarding.filter(company_id=company_id)
+    if company_ids is not None:
+        applications = applications.filter(company_id__in=company_ids)
+        vacancies = vacancies.filter(company_id__in=company_ids)
+        offers = offers.filter(company_id__in=company_ids)
+        onboarding = onboarding.filter(company_id__in=company_ids)
     return {
         "open_vacancies": vacancies.filter(status=VacancyStatus.OPEN).count(),
         "active_applications": applications.exclude(
@@ -40,14 +40,14 @@ def recruitment_summary(*, company_id: str | None = None) -> dict[str, int]:
     }
 
 
-def recruitment_funnel(*, company_id: str | None = None) -> QuerySet[Any, Any]:
+def recruitment_funnel(*, company_ids: list[Any] | None = None) -> QuerySet[Any, Any]:
     queryset = CandidateApplication.objects.all()
-    if company_id:
-        queryset = queryset.filter(company_id=company_id)
+    if company_ids is not None:
+        queryset = queryset.filter(company_id__in=company_ids)
     return queryset.values("status").annotate(count=Count("id")).order_by("status")
 
 
-def recruitment_exceptions(*, company_id: str | None = None) -> list[dict[str, str]]:
+def recruitment_exceptions(*, company_ids: list[Any] | None = None) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
     stale = CandidateApplication.objects.filter(
         status=ApplicationStatus.ONBOARDING, onboarding__status=OnboardingStatus.BLOCKED
@@ -56,8 +56,11 @@ def recruitment_exceptions(*, company_id: str | None = None) -> list[dict[str, s
         status=OfferStatus.ISSUED,
         offer_expiry_date__lt=__import__("django").utils.timezone.localdate(),
     )
-    if company_id:
-        stale, expired = stale.filter(company_id=company_id), expired.filter(company_id=company_id)
+    if company_ids is not None:
+        stale, expired = (
+            stale.filter(company_id__in=company_ids),
+            expired.filter(company_id__in=company_ids),
+        )
     results.extend(
         {"code": "BLOCKED_ONBOARDING", "severity": "HIGH", "object_id": str(item.pk)}
         for item in stale

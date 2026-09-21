@@ -114,6 +114,21 @@ def test_non_superuser_cannot_deactivate_superuser_via_api(
     assert response.status_code == 403
 
 
+def test_non_superuser_cannot_reset_superuser_password(
+    client: APIClient, access_admin: User, superuser: User
+) -> None:
+    original_password = superuser.password
+    _auth(client, access_admin)
+    response = client.post(
+        f"/api/v1/identity/users/{superuser.pk}/set-password/",
+        {"password": "AnotherStrongPassword123!"},
+        format="json",
+    )
+    assert response.status_code == 403
+    superuser.refresh_from_db()
+    assert superuser.password == original_password
+
+
 def test_access_admin_can_activate_and_deactivate_other_user(
     client: APIClient, access_admin: User
 ) -> None:
@@ -180,6 +195,41 @@ def test_user_list_can_search_by_email(client: APIClient, access_admin: User) ->
     assert results[0]["email"] == "findme-user@example.com"
 
 
+def test_company_admin_user_list_excludes_unassigned_and_other_company_users(
+    client: APIClient,
+) -> None:
+    company_a = CompanyFactory.create()
+    company_b = CompanyFactory.create()
+    role = RoleFactory.create(company=company_a)
+    role.permissions.add(_permission("view_user"))
+    actor = UserFactory.create()
+    visible = UserFactory.create()
+    foreign = UserFactory.create()
+    unassigned = UserFactory.create()
+    UserRoleAssignmentFactory.create(
+        user=actor, role=role, scope_type=AccessScopeType.COMPANY, company=company_a
+    )
+    UserRoleAssignmentFactory.create(
+        user=visible, role=role, scope_type=AccessScopeType.COMPANY, company=company_a
+    )
+    UserRoleAssignmentFactory.create(
+        user=foreign,
+        role=RoleFactory.create(company=company_b),
+        scope_type=AccessScopeType.COMPANY,
+        company=company_b,
+    )
+
+    _auth(client, actor)
+    response = client.get("/api/v1/identity/users/")
+    assert response.status_code == 200
+    ids = {item["id"] for item in response.json()["results"]}
+    assert str(visible.pk) in ids
+    assert str(foreign.pk) not in ids
+    assert str(unassigned.pk) not in ids
+    assert client.get(f"/api/v1/identity/users/{foreign.pk}/").status_code == 404
+    assert client.get(f"/api/v1/identity/users/{unassigned.pk}/").status_code == 404
+
+
 # --------------------------------------------------------------------------
 # Roles
 # --------------------------------------------------------------------------
@@ -196,13 +246,19 @@ def test_plain_user_cannot_create_role(client: APIClient, plain_user: User) -> N
 def test_access_admin_can_create_role_with_permissions(
     client: APIClient, access_admin: User
 ) -> None:
+    company = CompanyFactory.create()
     view_branch = Permission.objects.get(
         content_type__app_label="organization", codename="view_branch"
     )
     _auth(client, access_admin)
     response = client.post(
         "/api/v1/identity/roles/",
-        {"code": "branch-viewer", "name": "Branch Viewer", "permissions": [view_branch.pk]},
+        {
+            "company": str(company.pk),
+            "code": "branch-viewer",
+            "name": "Branch Viewer",
+            "permissions": [view_branch.pk],
+        },
         format="json",
     )
     assert response.status_code == 201
@@ -212,10 +268,31 @@ def test_access_admin_can_create_role_with_permissions(
 
 
 def test_access_admin_cannot_modify_system_role(client: APIClient, access_admin: User) -> None:
-    system_role = RoleFactory.create(is_system=True)
+    system_role = RoleFactory.create(company=CompanyFactory.create(), is_system=True)
     _auth(client, access_admin)
     response = client.patch(
         f"/api/v1/identity/roles/{system_role.pk}/", {"name": "Renamed"}, format="json"
+    )
+    assert response.status_code == 403
+
+
+def test_non_superuser_cannot_modify_global_custom_role(
+    client: APIClient, access_admin: User
+) -> None:
+    global_role = RoleFactory.create(is_system=False)
+    _auth(client, access_admin)
+    response = client.patch(
+        f"/api/v1/identity/roles/{global_role.pk}/", {"name": "Renamed"}, format="json"
+    )
+    assert response.status_code == 404
+    global_role.refresh_from_db()
+    assert global_role.name != "Renamed"
+
+
+def test_non_superuser_cannot_create_global_role(client: APIClient, access_admin: User) -> None:
+    _auth(client, access_admin)
+    response = client.post(
+        "/api/v1/identity/roles/", {"code": "GLOBAL-NEW", "name": "Global New"}, format="json"
     )
     assert response.status_code == 403
 

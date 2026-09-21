@@ -9,6 +9,7 @@ list querysets are scope-filtered up front (not just object-level gated) and
 writes are checked against the requested/actual organizational scope.
 """
 
+import copy
 import uuid
 from collections.abc import Callable
 from typing import Any, cast
@@ -162,6 +163,17 @@ class BaseOrganizationViewSet(
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
+        candidate = copy.copy(instance)
+        for name, value in serializer.validated_data.items():
+            setattr(candidate, name, value)
+        user = cast(User, request.user)
+        permission = f"{self.model._meta.app_label}.change_{self.model._meta.model_name}"
+        if not user.is_superuser and not identity_access.has_permission(
+            user=user, permission=permission, **self.get_scope_kwargs(candidate)
+        ):
+            raise DRFPermissionDenied(
+                "You do not have permission in the resulting organizational scope."
+            )
         service_kwargs = {self.instance_kwarg: instance, **serializer.validated_data}
         updated = _service_call(self.update_service, **service_kwargs)
         read_serializer = self.serializer_class(updated)

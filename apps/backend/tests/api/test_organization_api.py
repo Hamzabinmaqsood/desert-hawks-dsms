@@ -206,7 +206,7 @@ def test_cannot_create_records_outside_permitted_scope(client: APIClient) -> Non
         {"company": str(other_company.pk), "code": "R1", "name": "Region 1"},
         format="json",
     )
-    assert response.status_code == 403
+    assert response.status_code == 400
 
 
 def test_region_scoped_admin_can_manage_branch_in_region_but_not_outside(
@@ -252,7 +252,7 @@ def test_region_scoped_admin_can_manage_branch_in_region_but_not_outside(
         },
         format="json",
     )
-    assert out_of_scope_response.status_code == 403
+    assert out_of_scope_response.status_code == 400
 
 
 # --------------------------------------------------------------------------
@@ -488,3 +488,26 @@ def test_operational_zone_create_and_deactivate(client: APIClient, superuser: Us
     )
     assert deactivate_response.status_code == 200
     assert deactivate_response.json()["is_active"] is False
+
+
+def test_branch_region_patch_cannot_leave_city_in_previous_region(
+    client: APIClient, superuser: User
+) -> None:
+    original_region = RegionFactory.create()
+    new_region = RegionFactory.create(company=original_region.company)
+    city = CityFactory.create(region=original_region, company=original_region.company)
+    branch = BranchFactory.create(
+        region=original_region, company=original_region.company, city=city
+    )
+    _auth(client, superuser)
+
+    response = client.patch(
+        f"/api/v1/organization/branches/{branch.pk}/",
+        {"region": str(new_region.pk)},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    branch.refresh_from_db()
+    assert branch.region_id == original_region.pk
+    assert branch.city_id == city.pk

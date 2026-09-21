@@ -58,7 +58,7 @@ def valid_employee_qualifications(
     )
 
 
-def training_dashboard_summary(*, company_id: str | None = None) -> dict[str, Any]:
+def training_dashboard_summary(*, company_ids: list[Any] | None = None) -> dict[str, Any]:
     today, now = timezone.localdate(), timezone.now()
     courses = TrainingCourse.objects.all()
     sessions = TrainingSession.objects.all()
@@ -66,18 +66,18 @@ def training_dashboard_summary(*, company_id: str | None = None) -> dict[str, An
     completions = TrainingCompletion.objects.all()
     certificates = TrainingCertificate.objects.all()
     employees = Employee.objects.filter(employment_status="ACTIVE", is_active=True)
-    if company_id:
+    if company_ids is not None:
         courses, sessions = (
-            courses.filter(company_id=company_id),
-            sessions.filter(company_id=company_id),
+            courses.filter(company_id__in=company_ids),
+            sessions.filter(company_id__in=company_ids),
         )
         enrollments, completions = (
-            enrollments.filter(company_id=company_id),
-            completions.filter(employee__company_id=company_id),
+            enrollments.filter(company_id__in=company_ids),
+            completions.filter(employee__company_id__in=company_ids),
         )
         certificates, employees = (
-            certificates.filter(company_id=company_id),
-            employees.filter(company_id=company_id),
+            certificates.filter(company_id__in=company_ids),
+            employees.filter(company_id__in=company_ids),
         )
     month_completions = completions.filter(
         completed_on__year=today.year, completed_on__month=today.month
@@ -117,13 +117,13 @@ def training_dashboard_summary(*, company_id: str | None = None) -> dict[str, An
     }
 
 
-def guard_readiness_list(*, company_id: str | None = None) -> list[dict[str, Any]]:
+def guard_readiness_list(*, company_ids: list[Any] | None = None) -> list[dict[str, Any]]:
     employees = Employee.objects.filter(
         employee_type__in=[EmployeeType.SECURITY_GUARD, EmployeeType.SUPERVISOR],
         employment_status="ACTIVE",
     ).select_related("company", "branch", "designation")
-    if company_id:
-        employees = employees.filter(company_id=company_id)
+    if company_ids is not None:
+        employees = employees.filter(company_id__in=company_ids)
     return [
         {
             "employee_id": str(employee.pk),
@@ -140,17 +140,17 @@ def guard_readiness_list(*, company_id: str | None = None) -> list[dict[str, Any
     ]
 
 
-def training_exceptions(*, company_id: str | None = None) -> list[dict[str, str]]:
+def training_exceptions(*, company_ids: list[Any] | None = None) -> list[dict[str, str]]:
     sessions = TrainingSession.objects.filter(
         status=TrainingSessionStatus.SCHEDULED, lead_instructor__isnull=True
     )
     external = __import__(
         "dsms.training.models", fromlist=["ExternalCertification"]
     ).ExternalCertification.objects.filter(verification_status="PENDING")
-    if company_id:
+    if company_ids is not None:
         sessions, external = (
-            sessions.filter(company_id=company_id),
-            external.filter(company_id=company_id),
+            sessions.filter(company_id__in=company_ids),
+            external.filter(company_id__in=company_ids),
         )
     return [
         {"code": "SESSION_WITHOUT_INSTRUCTOR", "severity": "HIGH", "object_id": str(item.pk)}

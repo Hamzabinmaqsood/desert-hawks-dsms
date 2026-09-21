@@ -9,8 +9,10 @@ calling ``serializer.save()`` directly, so business rules stay in
 from typing import Any
 
 from django.contrib.auth.models import Permission
+from django.db.models import Q
 from rest_framework import serializers
 
+from dsms.identity import access, selectors
 from dsms.identity.enums import AccessScopeType
 from dsms.identity.models import Role, User, UserRoleAssignment
 from dsms.organization.models import Branch, Company, Department, OperationalZone, Region
@@ -109,6 +111,31 @@ class RoleWriteSerializer(serializers.Serializer[Any]):
         queryset=Permission.objects.all(), many=True, required=False
     )
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not isinstance(user, User) or user.is_superuser:
+            return
+        company_field: Any = self.fields["company"]
+        company_field.queryset = Company.objects.filter(
+            id__in=access.get_fully_accessible_company_ids(
+                user, permission="identity.manage_roles"
+            ),
+            is_active=True,
+        )
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        if (
+            self.instance is not None
+            and "company" in attrs
+            and attrs["company"] != self.instance.company
+        ):
+            raise serializers.ValidationError(
+                {"company": "Role company cannot be changed after creation."}
+            )
+        return attrs
+
     def validate_code(self, value: str) -> str:
         return value.strip().upper()
 
@@ -185,6 +212,46 @@ class UserRoleAssignmentWriteSerializer(serializers.Serializer[Any]):
     )
     starts_at = serializers.DateTimeField(required=False, allow_null=True)
     ends_at = serializers.DateTimeField(required=False, allow_null=True)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        actor = getattr(request, "user", None)
+        if not isinstance(actor, User) or actor.is_superuser:
+            return
+        permission = "identity.assign_roles"
+        company_ids = access.get_accessible_company_ids(actor, permission=permission)
+        company_field: Any = self.fields["company"]
+        company_field.queryset = Company.objects.filter(id__in=company_ids, is_active=True)
+        region_field: Any = self.fields["region"]
+        region_field.queryset = Region.objects.filter(
+            id__in=access.get_accessible_region_ids(actor, permission=permission),
+            company__is_active=True,
+        )
+        branch_field: Any = self.fields["branch"]
+        branch_field.queryset = Branch.objects.filter(
+            id__in=access.get_accessible_branch_ids(actor, permission=permission),
+            company__is_active=True,
+        )
+        department_field: Any = self.fields["department"]
+        department_field.queryset = Department.objects.filter(
+            id__in=access.get_accessible_department_ids(actor, permission=permission),
+            company__is_active=True,
+        )
+        zone_field: Any = self.fields["operational_zone"]
+        zone_field.queryset = OperationalZone.objects.filter(
+            id__in=access.get_accessible_operational_zone_ids(actor, permission=permission),
+            company__is_active=True,
+        )
+        role_field: Any = self.fields["role"]
+        role_field.queryset = Role.objects.filter(
+            Q(company__isnull=True) | Q(company_id__in=company_ids), is_active=True
+        )
+        visible_users = selectors.get_accessible_users(actor=actor, permission=permission)
+        user_field: Any = self.fields["user"]
+        user_field.queryset = User.objects.filter(
+            Q(pk__in=visible_users.values("pk")) | Q(role_assignments__isnull=True), is_active=True
+        ).distinct()
 
 
 # --------------------------------------------------------------------------

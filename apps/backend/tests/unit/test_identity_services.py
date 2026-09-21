@@ -1,7 +1,10 @@
+from datetime import timedelta
+
 import pytest
 from django.contrib.auth.models import Permission
+from django.utils import timezone
 
-from dsms.identity import services
+from dsms.identity import access, services
 from dsms.identity.enums import AccessScopeType
 from dsms.identity.exceptions import (
     DuplicateAssignmentError,
@@ -27,6 +30,47 @@ def _role_with_permissions(*codenames: str, app_label: str = "identity") -> Role
     role = RoleFactory.create()
     role.permissions.set([_permission(codename, app_label) for codename in codenames])
     return role
+
+
+def test_accessible_companies_exclude_inactive_and_out_of_window_assignments() -> None:
+    company_a = CompanyFactory.create()
+    company_b = CompanyFactory.create(is_active=False)
+    company_future = CompanyFactory.create()
+    company_expired = CompanyFactory.create()
+    actor = UserFactory.create()
+    role = _role_with_permissions("view_company", app_label="organization")
+    now = timezone.now()
+    for company, window in (
+        (company_a, {}),
+        (company_b, {}),
+        (company_future, {"starts_at": now + timedelta(days=1)}),
+        (company_expired, {"ends_at": now - timedelta(days=1)}),
+    ):
+        UserRoleAssignmentFactory.create(
+            user=actor, role=role, scope_type=AccessScopeType.COMPANY, company=company, **window
+        )
+
+    assert access.get_accessible_company_ids(actor, permission="organization.view_company") == {
+        company_a.pk
+    }
+    company_b.is_active = True
+    company_b.save(update_fields=["is_active"])
+    assert access.get_accessible_company_ids(actor, permission="organization.view_company") == {
+        company_a.pk,
+        company_b.pk,
+    }
+
+    global_actor = UserFactory.create()
+    UserRoleAssignmentFactory.create(
+        user=global_actor, role=role, scope_type=AccessScopeType.GLOBAL
+    )
+    assert access.get_accessible_company_ids(
+        global_actor, permission="organization.view_company"
+    ) == {company_a.pk, company_b.pk, company_future.pk, company_expired.pk}
+    company_b.is_active = False
+    company_b.save(update_fields=["is_active"])
+    superuser = UserFactory.create(is_superuser=True)
+    assert company_b.pk in access.get_accessible_company_ids(superuser)
 
 
 # --------------------------------------------------------------------------

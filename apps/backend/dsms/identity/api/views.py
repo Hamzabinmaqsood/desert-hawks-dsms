@@ -6,7 +6,7 @@ exceptions raised there are translated into DRF errors here.
 """
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -18,7 +18,7 @@ from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from dsms.identity import selectors, services
+from dsms.identity import access, selectors, services
 from dsms.identity.exceptions import (
     IdentityError,
     ScopeAuthorizationError,
@@ -27,6 +27,7 @@ from dsms.identity.exceptions import (
     SystemRoleProtectedError,
     to_error_dict,
 )
+from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission, RequiresPermission
 
 from .filters import PermissionFilterSet, RoleFilterSet, UserFilterSet, UserRoleAssignmentFilterSet
@@ -92,7 +93,34 @@ class UserViewSet(
     serializer_class = UserReadSerializer
 
     def get_queryset(self) -> Any:
-        return selectors.get_users()
+        permission = {
+            "create": "identity.add_user",
+            "update": "identity.change_user",
+            "partial_update": "identity.change_user",
+            "activate": "identity.change_user",
+            "deactivate": "identity.change_user",
+            "set_password": "identity.change_user",
+        }.get(self.action, "identity.view_user")
+        return selectors.get_accessible_users(
+            actor=cast(User, self.request.user), permission=permission
+        )
+
+    def _require_complete_user_scope(self, user: User) -> None:
+        actor = cast(User, self.request.user)
+        if actor.is_superuser:
+            return
+        if user.is_superuser:
+            raise DRFPermissionDenied("Only superusers may administer a superuser account.")
+        all_assignment_ids = set(user.role_assignments.values_list("id", flat=True))
+        manageable_ids = set(
+            selectors.get_accessible_role_assignments(
+                actor=actor, permission="identity.change_user"
+            ).values_list("id", flat=True)
+        )
+        if not all_assignment_ids.issubset(manageable_ids):
+            raise DRFPermissionDenied(
+                "Users with assignments outside your tenant scope require platform administration."
+            )
 
     def get_serializer_class(self) -> type[serializers.BaseSerializer[Any]]:
         if self.action in {"create", "update", "partial_update"}:
@@ -112,6 +140,7 @@ class UserViewSet(
     def update(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         partial = kwargs.get("partial", False)
         instance = self.get_object()
+        self._require_complete_user_scope(instance)
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
@@ -129,12 +158,14 @@ class UserViewSet(
     @action(detail=True, methods=["post"])
     def activate(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         instance = self.get_object()
+        self._require_complete_user_scope(instance)
         updated = _service_call(services.activate_user, user=instance)
         return Response(UserReadSerializer(updated).data)
 
     @action(detail=True, methods=["post"])
     def deactivate(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         instance = self.get_object()
+        self._require_complete_user_scope(instance)
         updated = _service_call(services.deactivate_user, user=instance, actor=request.user)
         return Response(UserReadSerializer(updated).data)
 
@@ -142,6 +173,7 @@ class UserViewSet(
     @action(detail=True, methods=["post"], url_path="set-password")
     def set_password(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         instance = self.get_object()
+        self._require_complete_user_scope(instance)
         serializer = SetPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         _service_call(
@@ -176,7 +208,21 @@ class RoleViewSet(
     serializer_class = RoleReadSerializer
 
     def get_queryset(self) -> Any:
-        return selectors.get_roles()
+        write_action = self.action in {
+            "create",
+            "update",
+            "partial_update",
+            "activate",
+            "deactivate",
+        }
+        actor = cast(User, self.request.user)
+        queryset = selectors.get_accessible_roles(
+            actor=actor,
+            permission="identity.manage_roles" if write_action else "identity.view_role",
+        )
+        if write_action and not actor.is_superuser:
+            return queryset.filter(company__isnull=False)
+        return queryset
 
     def get_serializer_class(self) -> type[serializers.BaseSerializer[Any]]:
         if self.action in {"create", "update", "partial_update"}:
@@ -188,6 +234,14 @@ class RoleViewSet(
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
         role_permissions = data.pop("permissions", None)
+        company = data.get("company")
+        actor = cast(User, request.user)
+        if company is None and not actor.is_superuser:
+            raise DRFPermissionDenied("Only superusers may create global roles.")
+        if company is not None and not access.has_permission(
+            user=actor, permission="identity.manage_roles", company=company
+        ):
+            raise DRFPermissionDenied("You cannot create roles for this company.")
         instance = _service_call(services.create_role, **data)
         if role_permissions is not None:
             instance = _service_call(
@@ -260,7 +314,14 @@ class UserRoleAssignmentViewSet(
     serializer_class = UserRoleAssignmentReadSerializer
 
     def get_queryset(self) -> Any:
-        return selectors.get_role_assignments()
+        permission = (
+            "identity.assign_roles"
+            if self.action in {"create", "update", "partial_update", "activate", "deactivate"}
+            else "identity.view_userroleassignment"
+        )
+        return selectors.get_accessible_role_assignments(
+            actor=cast(User, self.request.user), permission=permission
+        )
 
     def get_serializer_class(self) -> type[serializers.BaseSerializer[Any]]:
         if self.action in {"create", "update", "partial_update"}:
@@ -332,6 +393,6 @@ class AccessMatrixView(generics.GenericAPIView[Any]):
 
     @extend_schema(tags=["Access Control - Permissions"])
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-        data = selectors.get_access_matrix()
+        data = selectors.get_accessible_access_matrix(actor=cast(User, request.user))
         serializer = self.get_serializer(data, many=True)
         return Response(serializer.data)

@@ -76,6 +76,7 @@ def get_active_role_assignments(user: User | None) -> QuerySet[UserRoleAssignmen
         UserRoleAssignment.objects.filter(user=user, is_active=True, role__is_active=True)
         .filter(Q(starts_at__isnull=True) | Q(starts_at__lte=now))
         .filter(Q(ends_at__isnull=True) | Q(ends_at__gte=now))
+        .filter(Q(scope_type=AccessScopeType.GLOBAL) | Q(company__is_active=True))
         .select_related("role", "company", "region", "branch", "department", "operational_zone")
         .prefetch_related("role__permissions__content_type")
     )
@@ -147,6 +148,14 @@ def has_permission(
         return False
     if user is not None and user.is_superuser:
         return True
+    target_company = company
+    if target_company is None:
+        for scoped_object in (region, branch, department, operational_zone):
+            if scoped_object is not None:
+                target_company = scoped_object.company
+                break
+    if target_company is not None and not target_company.is_active:
+        return False
     for assignment in get_active_role_assignments(user):
         if permission not in _role_permission_codes(assignment.role):
             continue
@@ -179,10 +188,10 @@ def get_accessible_company_ids(
     ids: set[uuid.UUID] = set()
     for assignment in _filtered_assignments(user, permission=permission):
         if assignment.scope_type == AccessScopeType.GLOBAL:
-            return set(Company.objects.values_list("id", flat=True))
+            return set(Company.objects.filter(is_active=True).values_list("id", flat=True))
         if assignment.company_id:
             ids.add(assignment.company_id)
-    return ids
+    return set(Company.objects.filter(id__in=ids, is_active=True).values_list("id", flat=True))
 
 
 def get_fully_accessible_company_ids(
@@ -203,10 +212,10 @@ def get_fully_accessible_company_ids(
     ids: set[uuid.UUID] = set()
     for assignment in _filtered_assignments(user, permission=permission):
         if assignment.scope_type == AccessScopeType.GLOBAL:
-            return set(Company.objects.values_list("id", flat=True))
+            return set(Company.objects.filter(is_active=True).values_list("id", flat=True))
         if assignment.scope_type == AccessScopeType.COMPANY and assignment.company_id:
             ids.add(assignment.company_id)
-    return ids
+    return set(Company.objects.filter(id__in=ids, is_active=True).values_list("id", flat=True))
 
 
 def get_accessible_region_ids(
@@ -220,14 +229,16 @@ def get_accessible_region_ids(
     company_ids: set[uuid.UUID] = set()
     for assignment in _filtered_assignments(user, permission=permission):
         if assignment.scope_type == AccessScopeType.GLOBAL:
-            return set(Region.objects.values_list("id", flat=True))
+            return set(Region.objects.filter(company__is_active=True).values_list("id", flat=True))
         if assignment.scope_type == AccessScopeType.COMPANY and assignment.company_id:
             company_ids.add(assignment.company_id)
         elif assignment.scope_type == AccessScopeType.REGION and assignment.region_id:
             ids.add(assignment.region_id)
     if company_ids:
         ids |= set(Region.objects.filter(company_id__in=company_ids).values_list("id", flat=True))
-    return ids
+    return set(
+        Region.objects.filter(id__in=ids, company__is_active=True).values_list("id", flat=True)
+    )
 
 
 def get_accessible_branch_ids(
@@ -242,7 +253,7 @@ def get_accessible_branch_ids(
     region_ids: set[uuid.UUID] = set()
     for assignment in _filtered_assignments(user, permission=permission):
         if assignment.scope_type == AccessScopeType.GLOBAL:
-            return set(Branch.objects.values_list("id", flat=True))
+            return set(Branch.objects.filter(company__is_active=True).values_list("id", flat=True))
         if assignment.scope_type == AccessScopeType.COMPANY and assignment.company_id:
             company_ids.add(assignment.company_id)
         elif assignment.scope_type == AccessScopeType.REGION and assignment.region_id:
@@ -253,7 +264,9 @@ def get_accessible_branch_ids(
         ids |= set(Branch.objects.filter(company_id__in=company_ids).values_list("id", flat=True))
     if region_ids:
         ids |= set(Branch.objects.filter(region_id__in=region_ids).values_list("id", flat=True))
-    return ids
+    return set(
+        Branch.objects.filter(id__in=ids, company__is_active=True).values_list("id", flat=True)
+    )
 
 
 def get_accessible_department_ids(
@@ -267,7 +280,9 @@ def get_accessible_department_ids(
     company_ids: set[uuid.UUID] = set()
     for assignment in _filtered_assignments(user, permission=permission):
         if assignment.scope_type == AccessScopeType.GLOBAL:
-            return set(Department.objects.values_list("id", flat=True))
+            return set(
+                Department.objects.filter(company__is_active=True).values_list("id", flat=True)
+            )
         if assignment.scope_type == AccessScopeType.COMPANY and assignment.company_id:
             company_ids.add(assignment.company_id)
         elif assignment.scope_type == AccessScopeType.DEPARTMENT and assignment.department_id:
@@ -276,7 +291,9 @@ def get_accessible_department_ids(
         ids |= set(
             Department.objects.filter(company_id__in=company_ids).values_list("id", flat=True)
         )
-    return ids
+    return set(
+        Department.objects.filter(id__in=ids, company__is_active=True).values_list("id", flat=True)
+    )
 
 
 def get_accessible_operational_zone_ids(
@@ -292,7 +309,9 @@ def get_accessible_operational_zone_ids(
     branch_ids: set[uuid.UUID] = set()
     for assignment in _filtered_assignments(user, permission=permission):
         if assignment.scope_type == AccessScopeType.GLOBAL:
-            return set(OperationalZone.objects.values_list("id", flat=True))
+            return set(
+                OperationalZone.objects.filter(company__is_active=True).values_list("id", flat=True)
+            )
         if assignment.scope_type == AccessScopeType.COMPANY and assignment.company_id:
             company_ids.add(assignment.company_id)
         elif assignment.scope_type == AccessScopeType.REGION and assignment.region_id:
@@ -318,7 +337,11 @@ def get_accessible_operational_zone_ids(
         ids |= set(
             OperationalZone.objects.filter(branch_id__in=branch_ids).values_list("id", flat=True)
         )
-    return ids
+    return set(
+        OperationalZone.objects.filter(id__in=ids, company__is_active=True).values_list(
+            "id", flat=True
+        )
+    )
 
 
 def get_access_scope_summary(user: User | None) -> dict[str, Any]:

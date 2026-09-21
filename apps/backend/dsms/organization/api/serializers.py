@@ -11,6 +11,8 @@ from typing import Any
 
 from rest_framework import serializers
 
+from dsms.identity import access as identity_access
+from dsms.identity.models import User
 from dsms.organization.enums import DepartmentScope
 from dsms.organization.models import (
     Branch,
@@ -21,6 +23,62 @@ from dsms.organization.models import (
     OperationalZone,
     Region,
 )
+
+
+class _TenantScopedOrganizationWriteMixin:
+    """Constrain organizational references and forbid ownership transfer."""
+
+    instance: Any
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        request = getattr(self, "context", {}).get("request")
+        user = getattr(request, "user", None)
+        if not isinstance(user, User) or user.is_superuser:
+            return
+        queryset_ids = {
+            "company": identity_access.get_accessible_company_ids(user),
+            "region": identity_access.get_accessible_region_ids(user),
+            "branch": identity_access.get_accessible_branch_ids(user),
+            "department": identity_access.get_accessible_department_ids(user),
+            "operational_zone": identity_access.get_accessible_operational_zone_ids(user),
+        }
+        for name, ids in queryset_ids.items():
+            field = getattr(self, "fields", {}).get(name)
+            if isinstance(field, serializers.PrimaryKeyRelatedField) and field.queryset is not None:
+                field.queryset = field.queryset.filter(pk__in=ids)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        instance = self.instance
+        company = attrs.get("company") or getattr(instance, "company", None)
+        if (
+            instance is not None
+            and "company" in attrs
+            and attrs["company"].pk != instance.company_id
+        ):
+            raise serializers.ValidationError(
+                {"company": "Company ownership cannot be changed after creation."}
+            )
+        errors: dict[str, str] = {}
+        for name in ("region", "branch", "department", "operational_zone", "parent"):
+            related = attrs.get(name)
+            if related is not None and getattr(related, "company_id", None) != getattr(
+                company, "pk", None
+            ):
+                errors[name] = "Must belong to the selected company."
+        city = attrs.get("city", getattr(instance, "city", None))
+        region = attrs.get("region") or getattr(instance, "region", None)
+        if city is not None and (
+            city.company_id != getattr(company, "pk", None)
+            or city.region_id != getattr(region, "pk", None)
+        ):
+            errors["city"] = "Must belong to the selected company and region."
+        branch = attrs.get("branch", getattr(instance, "branch", None))
+        if branch is not None and region is not None and branch.region_id != region.pk:
+            errors["branch"] = "Must belong to the selected region."
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
 
 
 class _NormalizedCodeMixin:
@@ -118,7 +176,9 @@ class RegionReadSerializer(serializers.ModelSerializer[Region]):
         read_only_fields = fields
 
 
-class RegionWriteSerializer(_NormalizedCodeMixin, serializers.Serializer[Any]):
+class RegionWriteSerializer(
+    _TenantScopedOrganizationWriteMixin, _NormalizedCodeMixin, serializers.Serializer[Any]
+):
     company = serializers.PrimaryKeyRelatedField(queryset=Company.objects.all())
     code = serializers.CharField(max_length=20)
     name = serializers.CharField(max_length=150)
@@ -155,7 +215,10 @@ class CityReadSerializer(serializers.ModelSerializer[City]):
 
 
 class CityWriteSerializer(
-    _NormalizedCodeMixin, _NormalizedCountryCodeMixin, serializers.Serializer[Any]
+    _TenantScopedOrganizationWriteMixin,
+    _NormalizedCodeMixin,
+    _NormalizedCountryCodeMixin,
+    serializers.Serializer[Any],
 ):
     company = serializers.PrimaryKeyRelatedField(queryset=Company.objects.all())
     region = serializers.PrimaryKeyRelatedField(queryset=Region.objects.all())
@@ -203,7 +266,9 @@ class BranchReadSerializer(serializers.ModelSerializer[Branch]):
         read_only_fields = fields
 
 
-class BranchWriteSerializer(_NormalizedCodeMixin, serializers.Serializer[Any]):
+class BranchWriteSerializer(
+    _TenantScopedOrganizationWriteMixin, _NormalizedCodeMixin, serializers.Serializer[Any]
+):
     company = serializers.PrimaryKeyRelatedField(queryset=Company.objects.all())
     region = serializers.PrimaryKeyRelatedField(queryset=Region.objects.all())
     city = serializers.PrimaryKeyRelatedField(queryset=City.objects.all())
@@ -255,7 +320,9 @@ class DepartmentReadSerializer(serializers.ModelSerializer[Department]):
         read_only_fields = fields
 
 
-class DepartmentWriteSerializer(_NormalizedCodeMixin, serializers.Serializer[Any]):
+class DepartmentWriteSerializer(
+    _TenantScopedOrganizationWriteMixin, _NormalizedCodeMixin, serializers.Serializer[Any]
+):
     company = serializers.PrimaryKeyRelatedField(queryset=Company.objects.all())
     parent = serializers.PrimaryKeyRelatedField(  # type: ignore[assignment]
         # "parent" is a valid DRF field name (DRF collects declared fields via
@@ -304,7 +371,9 @@ class DesignationReadSerializer(serializers.ModelSerializer[Designation]):
         read_only_fields = fields
 
 
-class DesignationWriteSerializer(_NormalizedCodeMixin, serializers.Serializer[Any]):
+class DesignationWriteSerializer(
+    _TenantScopedOrganizationWriteMixin, _NormalizedCodeMixin, serializers.Serializer[Any]
+):
     company = serializers.PrimaryKeyRelatedField(queryset=Company.objects.all())
     department = serializers.PrimaryKeyRelatedField(
         queryset=Department.objects.all(), required=False, allow_null=True
@@ -344,7 +413,9 @@ class OperationalZoneReadSerializer(serializers.ModelSerializer[OperationalZone]
         read_only_fields = fields
 
 
-class OperationalZoneWriteSerializer(_NormalizedCodeMixin, serializers.Serializer[Any]):
+class OperationalZoneWriteSerializer(
+    _TenantScopedOrganizationWriteMixin, _NormalizedCodeMixin, serializers.Serializer[Any]
+):
     company = serializers.PrimaryKeyRelatedField(queryset=Company.objects.all())
     branch = serializers.PrimaryKeyRelatedField(queryset=Branch.objects.all())
     code = serializers.CharField(max_length=20)
