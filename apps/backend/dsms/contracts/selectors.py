@@ -120,20 +120,25 @@ def get_effective_staffing_demand(
     return tuple(result)
 
 
-def contractual_demand_summary(*, company_id: str | None = None) -> dict[str, Any]:
+def contractual_demand_summary(
+    *, company_id: str | None = None, company_ids: list[Any] | None = None
+) -> dict[str, Any]:
+    from .api.security import consistent_queryset
+
     today = timezone.localdate()
-    requirements = get_active_staffing_requirements(on_date=today)
+    requirements = consistent_queryset(get_active_staffing_requirements(on_date=today))
     contracts, sites, posts = (
-        ServiceContract.objects.filter(status=ContractStatus.ACTIVE),
-        SecuritySite.objects.filter(status=SiteStatus.ACTIVE),
-        SecurityPost.objects.filter(status=PostStatus.ACTIVE),
+        consistent_queryset(ServiceContract.objects.filter(status=ContractStatus.ACTIVE)),
+        consistent_queryset(SecuritySite.objects.filter(status=SiteStatus.ACTIVE)),
+        consistent_queryset(SecurityPost.objects.filter(status=PostStatus.ACTIVE)),
     )
-    if company_id:
+    if company_id or company_ids is not None:
+        ids = company_ids if company_ids is not None else [company_id]
         requirements, contracts, sites, posts = (
-            requirements.filter(company_id=company_id),
-            contracts.filter(company_id=company_id),
-            sites.filter(company_id=company_id),
-            posts.filter(company_id=company_id),
+            requirements.filter(company_id__in=ids),
+            contracts.filter(company_id__in=ids),
+            sites.filter(company_id__in=ids),
+            posts.filter(company_id__in=ids),
         )
     total = requirements.aggregate(value=Sum("required_headcount"))["value"] or 0
     return {
@@ -168,22 +173,27 @@ def contractual_demand_summary(*, company_id: str | None = None) -> dict[str, An
     }
 
 
-def contract_dashboard_summary(*, company_id: str | None = None) -> dict[str, Any]:
+def contract_dashboard_summary(
+    *, company_id: str | None = None, company_ids: list[Any] | None = None
+) -> dict[str, Any]:
+    from .api.security import consistent_queryset
+
     today = timezone.localdate()
     contracts, clients, sites, posts = (
-        ServiceContract.objects.all(),
-        Client.objects.all(),
-        SecuritySite.objects.all(),
-        SecurityPost.objects.all(),
+        consistent_queryset(ServiceContract.objects.all()),
+        consistent_queryset(Client.objects.all()),
+        consistent_queryset(SecuritySite.objects.all()),
+        consistent_queryset(SecurityPost.objects.all()),
     )
-    if company_id:
+    if company_id or company_ids is not None:
+        ids = company_ids if company_ids is not None else [company_id]
         contracts, clients, sites, posts = (
-            contracts.filter(company_id=company_id),
-            clients.filter(company_id=company_id),
-            sites.filter(company_id=company_id),
-            posts.filter(company_id=company_id),
+            contracts.filter(company_id__in=ids),
+            clients.filter(company_id__in=ids),
+            sites.filter(company_id__in=ids),
+            posts.filter(company_id__in=ids),
         )
-    demand = contractual_demand_summary(company_id=company_id)
+    demand = contractual_demand_summary(company_id=company_id, company_ids=company_ids)
     return {
         "active_clients": clients.filter(status="ACTIVE").count(),
         "active_contracts": contracts.filter(status="ACTIVE").count(),

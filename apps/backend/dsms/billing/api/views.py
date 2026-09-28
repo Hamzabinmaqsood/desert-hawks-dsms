@@ -52,6 +52,7 @@ from ..services import (
     update_invoice_draft,
     update_invoice_line,
 )
+from . import security
 from .serializers import (
     BillingProfileSerializer,
     BillingRuleSerializer,
@@ -124,14 +125,52 @@ class NoDeleteViewSet(viewsets.ModelViewSet[Any]):
     http_method_names = ["get", "post", "put", "patch", "head", "options"]
     company_lookup = "company_id"
 
-    def get_queryset(self) -> Any:
-        queryset = super().get_queryset()
-        model = queryset.model
-        permission = f"{model._meta.app_label}.view_{model._meta.model_name}"
-        ids = access.get_fully_accessible_company_ids(
-            cast(User, self.request.user), permission=permission
+    def get_scope_permission(self) -> str:
+        model = cast(Any, self.queryset).model
+        verb = (
+            "view"
+            if self.action in {"list", "retrieve"}
+            else "add"
+            if self.action == "create"
+            else "change"
         )
-        return queryset.filter(**{f"{self.company_lookup}__in": ids})
+        return f"{model._meta.app_label}.{verb}_{model._meta.model_name}"
+
+    def get_queryset(self) -> Any:
+        return security.scoped_queryset(
+            super().get_queryset(),
+            user=cast(User, self.request.user),
+            permission=self.get_scope_permission(),
+        )
+
+    def _guard_write(self, serializer: Any) -> None:
+        actor = cast(User, self.request.user)
+        model = cast(Any, self.queryset).model
+        candidate = model(**serializer.validated_data)
+        if serializer.instance is not None:
+            for field in model._meta.fields:
+                if field.name not in serializer.validated_data and field.name != "id":
+                    setattr(candidate, field.name, getattr(serializer.instance, field.name))
+        company_id = security.company_id_for(candidate)
+        if company_id is None:
+            if not actor.is_superuser:
+                raise PermissionDenied("Only superusers may write global Billing references.")
+            return
+        from dsms.organization.models import Company
+
+        company = Company.objects.filter(pk=company_id, is_active=True).first()
+        if company is None or not access.has_permission(
+            user=actor, permission=self.get_scope_permission(), company=company
+        ):
+            raise PermissionDenied("You do not have permission in the requested company.")
+
+    def perform_create(self, serializer: Any) -> None:
+        self._guard_write(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer: Any) -> None:
+        self._guard_write(serializer)
+        serializer.save()
 
 
 class BillingProfileViewSet(NoDeleteViewSet):
@@ -149,6 +188,7 @@ class BillingScheduleViewSet(NoDeleteViewSet):
     filterset_fields = ["company", "client", "contract", "frequency", "is_active"]
 
     def perform_create(self, serializer: Any) -> None:
+        self._guard_write(serializer)
         serializer.save(created_by=self.request.user)
 
 
@@ -603,4 +643,5 @@ class CollectionActivityViewSet(NoDeleteViewSet):
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
 
     def perform_create(self, serializer: Any) -> None:
+        self._guard_write(serializer)
         serializer.save(actor=self.request.user)

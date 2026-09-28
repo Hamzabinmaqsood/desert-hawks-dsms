@@ -1,11 +1,16 @@
 from decimal import Decimal
 from typing import Any
 
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Q
 from rest_framework import serializers
 
 from dsms.contracts.models import ContractService, SecuritySite, ServiceContract
 from dsms.finance.models import Account, CostCenter
 from dsms.finance.operations_models import BankAccount
+from dsms.identity import access
+from dsms.identity.models import User
+from dsms.organization.models import Company
 
 from ..enums import InvoiceType
 from ..models import (
@@ -27,31 +32,197 @@ from ..models import (
 ZERO = Decimal("0.00")
 
 
-class BillingProfileSerializer(serializers.ModelSerializer[ClientBillingProfile]):
+class TenantSafeBillingSerializer(serializers.ModelSerializer[Any]):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        from .security import COMPANY_PATHS, GLOBAL_REFERENCES
+
+        request = self.context.get("request")
+        actor = getattr(request, "user", None)
+        if not isinstance(actor, User) or actor.is_superuser:
+            return
+        view = self.context.get("view")
+        permission = view.get_scope_permission() if view is not None else None
+        ids = access.get_fully_accessible_company_ids(actor, permission=permission)
+        for field in self.fields.values():
+            if not isinstance(field, serializers.PrimaryKeyRelatedField) or field.queryset is None:
+                continue
+            remote = field.queryset.model
+            if remote is Company:
+                field.queryset = field.queryset.filter(pk__in=ids, is_active=True)
+                continue
+            path = COMPANY_PATHS.get(remote)
+            if path:
+                condition = Q(**{f"{path}__in": ids})
+                if remote in GLOBAL_REFERENCES:
+                    condition |= Q(company__isnull=True)
+                field.queryset = field.queryset.filter(condition)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        from .security import COMPANY_PATHS, GLOBAL_REFERENCES, PRIMARY_PARENT, company_id_for
+
+        model = self.Meta.model
+        instance = self.instance
+        parent = PRIMARY_PARENT.get(model)
+        if parent:
+            if (
+                instance is not None
+                and parent in attrs
+                and attrs[parent] != getattr(instance, parent)
+            ):
+                raise serializers.ValidationError({parent: "Tenant ownership cannot be changed."})
+            owner = attrs.get(parent, getattr(instance, parent, None))
+        else:
+            if instance is not None and "company" in attrs and attrs["company"] != instance.company:
+                raise serializers.ValidationError(
+                    {"company": "Company ownership cannot be changed."}
+                )
+            owner = attrs.get("company", getattr(instance, "company", None))
+        company_id = company_id_for(owner)
+        errors: dict[str, str] = {}
+        for field in model._meta.fields:  # type: ignore[attr-defined]
+            remote = getattr(getattr(field, "remote_field", None), "model", None)
+            if field.name == "company" or remote not in COMPANY_PATHS:
+                continue
+            related = attrs.get(field.name, getattr(instance, field.name, None))
+            related_company_id = company_id_for(related)
+            if (
+                related is not None
+                and related_company_id != company_id
+                and not (remote in GLOBAL_REFERENCES and related_company_id is None)
+            ):
+                errors[field.name] = "Must belong to the same company."
+        if model is BillingSchedule:
+            client = attrs.get("client", getattr(instance, "client", None))
+            contract = attrs.get("contract", getattr(instance, "contract", None))
+            if client and contract and contract.client_id != client.pk:
+                errors["contract"] = "Must belong to the selected client."
+        if model is BillingRule:
+            schedule = attrs.get("billing_schedule", getattr(instance, "billing_schedule", None))
+            service = attrs.get("contract_service", getattr(instance, "contract_service", None))
+            site = attrs.get("site", getattr(instance, "site", None))
+            if schedule and service and service.contract_id != schedule.contract_id:
+                errors["contract_service"] = "Must belong to the schedule contract."
+            if schedule and site and site.contract_id != schedule.contract_id:
+                errors["site"] = "Must belong to the schedule contract."
+        if model is ClientCollectionActivity:
+            client = attrs.get("client", getattr(instance, "client", None))
+            invoice = attrs.get("invoice", getattr(instance, "invoice", None))
+            if client and invoice and invoice.client_id != client.pk:
+                errors["invoice"] = "Must belong to the selected client."
+        if errors:
+            raise serializers.ValidationError(errors)
+        candidate = model(**{**({"id": instance.pk} if instance else {}), **attrs})  # type: ignore[misc]
+        if instance is not None:
+            for field in model._meta.fields:  # type: ignore[attr-defined]
+                if field.name not in attrs and field.name != "id":
+                    setattr(candidate, field.name, getattr(instance, field.name))
+        if model in {ClientBillingProfile, BillingSchedule}:
+            try:
+                candidate.clean()
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(
+                    exc.message_dict if hasattr(exc, "message_dict") else exc.messages
+                ) from exc
+        return attrs
+
+
+class BillingProfileSerializer(TenantSafeBillingSerializer):
     class Meta:
         model = ClientBillingProfile
-        fields = "__all__"
+        fields = (
+            "id",
+            "created_at",
+            "updated_at",
+            "is_active",
+            "client",
+            "company",
+            "billing_name",
+            "billing_address",
+            "billing_email",
+            "billing_phone",
+            "tax_registration_number",
+            "payment_terms_days",
+            "currency",
+            "default_billing_frequency",
+            "default_revenue_account",
+            "default_receivable_account",
+            "default_tax_account",
+            "default_discount_account",
+            "default_payment_instructions",
+            "invoice_notes",
+        )
         read_only_fields = ("id", "created_at", "updated_at")
 
 
-class BillingScheduleSerializer(serializers.ModelSerializer[BillingSchedule]):
+class BillingScheduleSerializer(TenantSafeBillingSerializer):
     class Meta:
         model = BillingSchedule
-        fields = "__all__"
-        read_only_fields = ("id", "created_by", "created_at", "updated_at")
+        fields = (
+            "id",
+            "created_at",
+            "updated_at",
+            "is_active",
+            "company",
+            "client",
+            "contract",
+            "frequency",
+            "billing_day",
+            "period_alignment",
+            "first_billing_date",
+            "next_billing_date",
+            "end_date",
+            "generate_days_before_period_end",
+            "payment_terms_days",
+            "auto_generate_draft",
+            "created_by",
+        )
+        read_only_fields = ("id", "created_by", "next_billing_date", "created_at", "updated_at")
 
 
-class BillingRuleSerializer(serializers.ModelSerializer[BillingRule]):
+class BillingRuleSerializer(TenantSafeBillingSerializer):
     class Meta:
         model = BillingRule
-        fields = "__all__"
+        fields = (
+            "id",
+            "created_at",
+            "updated_at",
+            "is_active",
+            "billing_schedule",
+            "contract_service",
+            "site",
+            "description",
+            "calculation_method",
+            "quantity_source",
+            "unit_price",
+            "minimum_quantity",
+            "maximum_quantity",
+            "tax_code",
+            "revenue_account",
+            "cost_center",
+            "effective_from",
+            "effective_to",
+        )
         read_only_fields = ("id", "created_at", "updated_at")
 
 
-class TaxCodeSerializer(serializers.ModelSerializer[TaxCode]):
+class TaxCodeSerializer(TenantSafeBillingSerializer):
     class Meta:
         model = TaxCode
-        fields = "__all__"
+        fields = (
+            "id",
+            "created_at",
+            "updated_at",
+            "is_active",
+            "company",
+            "code",
+            "name",
+            "rate",
+            "tax_account",
+            "effective_from",
+            "effective_to",
+            "notes",
+        )
         read_only_fields = ("id", "created_at", "updated_at")
 
 
@@ -314,8 +485,22 @@ class DebitNoteSerializer(serializers.ModelSerializer[ClientDebitNote]):
         )
 
 
-class CollectionActivitySerializer(serializers.ModelSerializer[ClientCollectionActivity]):
+class CollectionActivitySerializer(TenantSafeBillingSerializer):
     class Meta:
         model = ClientCollectionActivity
-        fields = "__all__"
+        fields = (
+            "id",
+            "created_at",
+            "updated_at",
+            "company",
+            "client",
+            "invoice",
+            "activity_type",
+            "activity_at",
+            "notes",
+            "promised_amount",
+            "promised_date",
+            "next_follow_up",
+            "actor",
+        )
         read_only_fields = ("id", "actor", "created_at", "updated_at")

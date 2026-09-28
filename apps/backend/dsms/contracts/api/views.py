@@ -1,15 +1,23 @@
-# mypy: disable-error-code="type-arg,attr-defined,no-untyped-def,arg-type"
+# mypy: disable-error-code="type-arg,attr-defined,no-untyped-def,arg-type,no-untyped-call"
+import copy
+from typing import cast
+
+from django.http import Http404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from dsms.identity.access import filter_queryset_by_scope
+from dsms.identity import access
+from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission
+from dsms.organization.models import Company
 
 from .. import models, selectors, services
+from . import security
 from .serializers import SERIALIZERS
 
 
@@ -22,9 +30,58 @@ class NoDeleteViewSet(
 ):
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
+    model: type
+
+    def get_scope_permission(self):
+        custom = getattr(self, "custom_action_permissions", {}).get(self.action)
+        if custom:
+            return custom
+        verb = (
+            "view"
+            if self.action in {"list", "retrieve"}
+            else "add"
+            if self.action == "create"
+            else "change"
+        )
+        return f"contracts.{verb}_{self.model._meta.model_name}"
 
     def get_queryset(self):
-        return filter_queryset_by_scope(super().get_queryset(), self.request.user)
+        return security.scoped_queryset(
+            super().get_queryset(), user=self.request.user, permission=self.get_scope_permission()
+        )
+
+    def _guard_write(self, candidate):
+        user = cast(User, self.request.user)
+        company_id = security.company_id_for(candidate)
+        if company_id is None:
+            if not user.is_superuser:
+                raise PermissionDenied("Only superusers may write global Contract references.")
+            return
+        company = Company.objects.filter(pk=company_id, is_active=True).first()
+        if company is None or not access.has_permission(
+            user=user, permission=self.get_scope_permission(), company=company
+        ):
+            raise PermissionDenied("You do not have permission in the requested company.")
+
+    def perform_create(self, serializer):
+        extra = {}
+        if self.model is models.ServiceContract:
+            extra["created_by"] = self.request.user
+        if self.model is models.SiteOperationalProfile:
+            extra["updated_by"] = self.request.user
+        candidate = self.model(**serializer.validated_data, **extra)
+        self._guard_write(candidate)
+        serializer.save(**extra)
+
+    def perform_update(self, serializer):
+        candidate = copy.copy(serializer.instance)
+        for name, value in serializer.validated_data.items():
+            setattr(candidate, name, value)
+        self._guard_write(candidate)
+        extra = (
+            {"updated_by": self.request.user} if self.model is models.SiteOperationalProfile else {}
+        )
+        serializer.save(**extra)
 
 
 def basic_viewset(model: type) -> type[NoDeleteViewSet]:
@@ -33,12 +90,17 @@ def basic_viewset(model: type) -> type[NoDeleteViewSet]:
         serializer_class = SERIALIZERS[model.__name__]
 
     ViewSet.__name__ = f"{model.__name__}ViewSet"
+    ViewSet.model = model
+    if model is models.ContractAmendment:
+        ViewSet.http_method_names = ["get", "head", "options"]
     return ViewSet
 
 
 class ClientViewSet(NoDeleteViewSet):
+    model = models.Client
     queryset = selectors.client_list()
     serializer_class = SERIALIZERS["Client"]
+    custom_action_permissions = {"activate": "contracts.change_client"}
 
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
@@ -48,8 +110,14 @@ class ClientViewSet(NoDeleteViewSet):
 
 
 class ContractViewSet(NoDeleteViewSet):
+    model = models.ServiceContract
     queryset = selectors.contract_list()
     serializer_class = SERIALIZERS["ServiceContract"]
+    custom_action_permissions = {
+        "submit": "contracts.change_servicecontract",
+        "approve": "contracts.approve_contract",
+        "activate": "contracts.activate_contract",
+    }
 
     @action(detail=True, methods=["post"])
     def submit(self, request, pk=None):
@@ -75,8 +143,10 @@ class ContractViewSet(NoDeleteViewSet):
 
 
 class SiteViewSet(NoDeleteViewSet):
+    model = models.SecuritySite
     queryset = selectors.security_site_list()
     serializer_class = SERIALIZERS["SecuritySite"]
+    custom_action_permissions = {"activate": "contracts.change_securitysite"}
 
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
@@ -86,8 +156,10 @@ class SiteViewSet(NoDeleteViewSet):
 
 
 class PostViewSet(NoDeleteViewSet):
+    model = models.SecurityPost
     queryset = models.SecurityPost.objects.select_related("site", "company", "client")
     serializer_class = SERIALIZERS["SecurityPost"]
+    custom_action_permissions = {"activate": "contracts.change_securitypost"}
 
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
@@ -97,8 +169,10 @@ class PostViewSet(NoDeleteViewSet):
 
 
 class StaffingViewSet(NoDeleteViewSet):
+    model = models.StaffingRequirement
     queryset = selectors.staffing_requirement_list()
     serializer_class = SERIALIZERS["StaffingRequirement"]
+    custom_action_permissions = {"activate": "contracts.change_staffingrequirement"}
 
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
@@ -130,7 +204,7 @@ SLAViewSet = basic_viewset(models.ServiceLevelAgreement)
 @permission_classes([IsAuthenticated])
 def dashboard_summary(request):
     return Response(
-        selectors.contract_dashboard_summary(company_id=request.query_params.get("company"))
+        selectors.contract_dashboard_summary(company_ids=_dashboard_company_ids(request))
     )
 
 
@@ -139,7 +213,7 @@ def dashboard_summary(request):
 @permission_classes([IsAuthenticated])
 def staffing_demand_summary(request):
     return Response(
-        selectors.contractual_demand_summary(company_id=request.query_params.get("company"))
+        selectors.contractual_demand_summary(company_ids=_dashboard_company_ids(request))
     )
 
 
@@ -147,7 +221,7 @@ def staffing_demand_summary(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def exception_center(request):
-    summary = selectors.contract_dashboard_summary(company_id=request.query_params.get("company"))
+    summary = selectors.contract_dashboard_summary(company_ids=_dashboard_company_ids(request))
     return Response(
         [
             {
@@ -162,3 +236,20 @@ def exception_center(request):
             },
         ]
     )
+
+
+def _dashboard_company_ids(request):
+    user: User = request.user
+    permission = "contracts.view_servicecontract"
+    if user.is_superuser:
+        requested = request.query_params.get("company")
+        return [requested] if requested else None
+    if permission not in access.get_effective_permissions(user):
+        raise PermissionDenied("You do not have permission to view Contract data.")
+    ids = access.get_fully_accessible_company_ids(user, permission=permission)
+    requested = request.query_params.get("company")
+    if requested:
+        if str(requested) not in {str(value) for value in ids}:
+            raise Http404
+        return [requested]
+    return list(ids)
