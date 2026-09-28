@@ -379,8 +379,8 @@ def test_bill_vendor_enforces_parent_company(multi_company_access: bool) -> None
     assert valid_detail.data["vendor_name"] == "Visible Vendor A"
     assert corrupt_detail.status_code == 404
     assert [row["id"] for row in listed.data["results"]] == [str(valid.id)]
-    assert legacy_detail.status_code == 404
-    assert [row["id"] for row in legacy_list.data] == [str(valid.id)]
+    assert legacy_detail.status_code == 403
+    assert legacy_list.status_code == 403
     serialized = (
         str(listed.data)
         + str(corrupt_detail.data)
@@ -453,8 +453,8 @@ def test_bill_purchase_order_enforces_parent_company(multi_company_access: bool)
     assert client.get(f"/api/v1/finance/vendor-bills/{without_po.id}/").status_code == 200
     assert corrupt_detail.status_code == 404
     assert {row["id"] for row in listed.data["results"]} == expected_ids
-    assert legacy_detail.status_code == 404
-    assert {row["id"] for row in legacy_list.data} == expected_ids
+    assert legacy_detail.status_code == 403
+    assert legacy_list.status_code == 403
     assert {row["id"] for row in payable.data} == expected_ids
     serialized = str(listed.data) + str(legacy_list.data) + str(payable.data)
     assert str(corrupt.id) not in serialized
@@ -462,7 +462,7 @@ def test_bill_purchase_order_enforces_parent_company(multi_company_access: bool)
 
 
 @pytest.mark.parametrize("multi_company_access", [False, True])
-def test_legacy_bill_journal_enforces_parent_company(multi_company_access: bool) -> None:
+def test_legacy_bill_journal_is_platform_only(multi_company_access: bool) -> None:
     company_a, company_b = graph(), graph()
     journal_a = JournalEntry.objects.create(
         company=company_a["company"],
@@ -521,14 +521,11 @@ def test_legacy_bill_journal_enforces_parent_company(multi_company_access: bool)
     )
     dedicated_detail = client.get(f"/api/v1/finance/vendor-bills/{corrupt.id}/")
 
-    expected_ids = {str(without_journal.id), str(same_company.id)}
-    assert {row["id"] for row in listed.data} == expected_ids
-    assert null_detail.status_code == 200
-    assert null_detail.data["journal_entry"] is None
-    assert valid_detail.status_code == 200
-    assert valid_detail.data["journal_entry"] == journal_a.id
-    assert corrupt_detail.status_code == 404
-    assert corrupt_action.status_code == 404
+    assert listed.status_code == 403
+    assert null_detail.status_code == 403
+    assert valid_detail.status_code == 403
+    assert corrupt_detail.status_code == 403
+    assert corrupt_action.status_code == 403
     assert str(corrupt.id) not in str(listed.data)
     assert str(journal_b.id) not in str(listed.data)
     assert dedicated_detail.status_code == 200

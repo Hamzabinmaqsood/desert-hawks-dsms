@@ -37,6 +37,7 @@ from ..services import (
     register_procurement_inventory,
     submit_asset_issue,
 )
+from ..tenant_queries import tenant_consistent_procurement_handoffs
 from .serializers import (
     AssetCategorySerializer,
     AssetFinancialSerializer,
@@ -76,6 +77,11 @@ class NoDeleteModelViewSet(viewsets.ModelViewSet[ModelT]):
     def get_create_scope_kwargs(self, validated_data: dict[str, Any]) -> dict[str, Any]:
         return {"company": validated_data.get("company")}
 
+    def get_update_scope_kwargs(
+        self, validated_data: dict[str, Any], instance: ModelT
+    ) -> dict[str, Any]:
+        return {"company": validated_data.get("company", getattr(instance, "company", None))}
+
     def _guard_create_scope(self, validated_data: dict[str, Any]) -> None:
         user = cast(User, self.request.user)
         if not access.has_permission(
@@ -89,6 +95,19 @@ class NoDeleteModelViewSet(viewsets.ModelViewSet[ModelT]):
 
     def perform_create(self, serializer: serializers.BaseSerializer[ModelT]) -> None:
         self._guard_create_scope(serializer.validated_data)
+        serializer.save()
+
+    def perform_update(self, serializer: serializers.BaseSerializer[ModelT]) -> None:
+        instance = cast(ModelT, serializer.instance)
+        user = cast(User, self.request.user)
+        if not access.has_permission(
+            user=user,
+            permission=self.get_scope_permission(),
+            **self.get_update_scope_kwargs(serializer.validated_data, instance),
+        ):
+            raise PermissionDenied(
+                "You do not have permission to update this resource in the resulting scope."
+            )
         serializer.save()
 
 
@@ -142,6 +161,16 @@ class AssetStoreViewSet(NoDeleteModelViewSet[AssetStore]):
             "operational_zone": operational_zone,
         }
 
+    def get_update_scope_kwargs(
+        self, validated_data: dict[str, Any], instance: AssetStore
+    ) -> dict[str, Any]:
+        resulting = {
+            "company": validated_data.get("company", instance.company),
+            "branch": validated_data.get("branch", instance.branch),
+            "operational_zone": validated_data.get("operational_zone", instance.operational_zone),
+        }
+        return self.get_create_scope_kwargs(resulting)
+
 
 @extend_schema_view(list=extend_schema(tags=["Assets"]), retrieve=extend_schema(tags=["Assets"]))
 class AssetViewSet(NoDeleteModelViewSet[Asset]):
@@ -166,6 +195,11 @@ class AssetViewSet(NoDeleteModelViewSet[Asset]):
 
     def get_serializer_class(self) -> type[serializers.BaseSerializer[Asset]]:
         return AssetFinancialSerializer
+
+    def get_update_scope_kwargs(
+        self, validated_data: dict[str, Any], instance: Asset
+    ) -> dict[str, Any]:
+        return selectors.asset_scope_kwargs(instance)
 
 
 class StockAccountViewSet(viewsets.ReadOnlyModelViewSet[StockAccount]):
@@ -219,6 +253,18 @@ class AssetIssueViewSet(NoDeleteModelViewSet[AssetIssue]):
             "branch": branch,
             "operational_zone": None,
         }
+
+    def get_update_scope_kwargs(
+        self, validated_data: dict[str, Any], instance: AssetIssue
+    ) -> dict[str, Any]:
+        resulting = {
+            "company": validated_data.get("company", instance.company),
+            "branch": validated_data.get("branch", instance.branch),
+            "site": validated_data.get("site", instance.site),
+            "employee": validated_data.get("employee", instance.employee),
+            "vehicle": validated_data.get("vehicle", instance.vehicle),
+        }
+        return self.get_create_scope_kwargs(resulting)
 
     def _workflow(self, function: Callable[..., AssetIssue]) -> response.Response:
         try:
@@ -362,11 +408,11 @@ class ProcurementReceiptLineViewSet(viewsets.GenericViewSet[PurchaseReceiptLine]
             pk=pk,
             receipt__company_id__in=companies,
         )
-        handoff = (
-            ProcurementInventoryHandoff.objects.select_related("asset_item__category")
-            .filter(receipt_line=line)
-            .first()
-        )
+        handoff = tenant_consistent_procurement_handoffs(
+            ProcurementInventoryHandoff.objects.select_related("asset_item__category").filter(
+                receipt_line=line
+            )
+        ).first()
         if (
             handoff
             and handoff.asset_item.category.is_controlled

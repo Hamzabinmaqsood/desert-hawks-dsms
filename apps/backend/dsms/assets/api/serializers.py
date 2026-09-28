@@ -1,9 +1,12 @@
 from decimal import Decimal
-from typing import cast
+from typing import Any, cast
 
+from django.db import models as django_models
+from django.db.models import Q
 from rest_framework import serializers
 
 from dsms.identity import access
+from dsms.identity.models import User
 from dsms.organization.models import Company
 
 from ..models import (
@@ -18,22 +21,118 @@ from ..models import (
     StockAccount,
 )
 from ..selectors import asset_scope_kwargs, procurement_registration_totals
+from ..tenant_queries import COMPANY_PATHS, GLOBAL_REFERENCES, company_id_for
 
 
-class AssetCategorySerializer(serializers.ModelSerializer[AssetCategory]):
+class TenantSafeAssetSerializer(serializers.ModelSerializer[Any]):
+    """Scope writable relations and validate the complete resulting tenant state."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        actor = getattr(request, "user", None)
+        if not isinstance(actor, User) or actor.is_superuser:
+            return
+        view = self.context.get("view")
+        permission = view.get_scope_permission() if view is not None else None
+        company_ids = access.get_fully_accessible_company_ids(actor, permission=permission)
+        for field in self.fields.values():
+            if not isinstance(field, serializers.PrimaryKeyRelatedField) or field.queryset is None:
+                continue
+            remote = field.queryset.model
+            if remote is Company:
+                field.queryset = field.queryset.filter(pk__in=company_ids, is_active=True)
+                continue
+            path = COMPANY_PATHS.get(remote)
+            if path is None:
+                continue
+            condition = Q(**{f"{path}__in": company_ids})
+            if remote in GLOBAL_REFERENCES:
+                condition |= Q(company__isnull=True)
+            field.queryset = field.queryset.filter(condition)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        model = cast(type[django_models.Model], self.Meta.model)
+        instance = self.instance
+        company = attrs.get("company", getattr(instance, "company", None))
+        if instance is not None and "company" in attrs and attrs["company"] != instance.company:
+            raise serializers.ValidationError({"company": "Company ownership cannot be changed."})
+        company_id = company_id_for(company)
+        errors: dict[str, str] = {}
+        for model_field in model._meta.fields:
+            remote = getattr(getattr(model_field, "remote_field", None), "model", None)
+            if model_field.name == "company" or remote not in COMPANY_PATHS:
+                continue
+            related = attrs.get(model_field.name, getattr(instance, model_field.name, None))
+            related_company_id = company_id_for(related)
+            if (
+                related is not None
+                and related_company_id != company_id
+                and not (remote in GLOBAL_REFERENCES and related_company_id is None)
+            ):
+                errors[model_field.name] = "Must belong to the same company."
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
+
+
+ASSET_CATEGORY_FIELDS = (
+    "id",
+    "company",
+    "code",
+    "name",
+    "category_type",
+    "description",
+    "tracking_method",
+    "is_returnable",
+    "is_consumable",
+    "requires_approval_for_issue",
+    "requires_employee_authorization",
+    "requires_serial_number",
+    "requires_periodic_inspection",
+    "default_inspection_interval_days",
+    "requires_maintenance",
+    "is_controlled",
+    "is_system",
+    "is_active",
+    "created_at",
+    "updated_at",
+)
+
+ASSET_ITEM_FIELDS = (
+    "id",
+    "company",
+    "category",
+    "item_code",
+    "name",
+    "description",
+    "manufacturer",
+    "model",
+    "unit_of_measure",
+    "reorder_level",
+    "reorder_quantity",
+    "expected_useful_life_months",
+    "is_active",
+    "created_at",
+    "updated_at",
+)
+
+
+class AssetCategorySerializer(TenantSafeAssetSerializer):
     class Meta:
         model = AssetCategory
-        fields = "__all__"
-        read_only_fields = ("id", "created_at", "updated_at")
+        fields = ASSET_CATEGORY_FIELDS
+        read_only_fields = ("id", "is_system", "created_at", "updated_at")
 
 
-class AssetItemSerializer(serializers.ModelSerializer[AssetItem]):
+class AssetItemSerializer(TenantSafeAssetSerializer):
     class Meta:
         model = AssetItem
-        exclude = ("standard_cost",)
+        fields = ASSET_ITEM_FIELDS
         read_only_fields = ("id", "created_at", "updated_at")
 
     def validate(self, attrs: dict[str, object]) -> dict[str, object]:
+        attrs = super().validate(attrs)
         company = attrs.get("company") or getattr(self.instance, "company", None)
         category = attrs.get("category") or getattr(self.instance, "category", None)
         category_company_id = getattr(category, "company_id", None)
@@ -49,7 +148,7 @@ class AssetItemFinancialSerializer(AssetItemSerializer):
 
     class Meta:
         model = AssetItem
-        fields = "__all__"
+        fields = ASSET_ITEM_FIELDS + ("standard_cost",)
         read_only_fields = AssetItemSerializer.Meta.read_only_fields
 
     def validate(self, attrs: dict[str, object]) -> dict[str, object]:
@@ -81,13 +180,27 @@ class AssetItemFinancialSerializer(AssetItemSerializer):
         return data
 
 
-class AssetStoreSerializer(serializers.ModelSerializer[AssetStore]):
+class AssetStoreSerializer(TenantSafeAssetSerializer):
     class Meta:
         model = AssetStore
-        fields = "__all__"
+        fields = (
+            "id",
+            "company",
+            "branch",
+            "operational_zone",
+            "code",
+            "name",
+            "address",
+            "store_manager",
+            "is_central_store",
+            "is_active",
+            "created_at",
+            "updated_at",
+        )
         read_only_fields = ("id", "created_at", "updated_at")
 
     def validate(self, attrs: dict[str, object]) -> dict[str, object]:
+        attrs = super().validate(attrs)
         company = attrs.get("company") or getattr(self.instance, "company", None)
         for field in ("branch", "operational_zone", "store_manager"):
             related = attrs.get(field)
@@ -98,10 +211,37 @@ class AssetStoreSerializer(serializers.ModelSerializer[AssetStore]):
         return attrs
 
 
-class AssetSerializer(serializers.ModelSerializer[Asset]):
+class AssetSerializer(TenantSafeAssetSerializer):
     class Meta:
         model = Asset
-        exclude = ("acquisition_cost",)
+        fields = (
+            "id",
+            "company",
+            "item",
+            "asset_number",
+            "serial_number",
+            "manufacturer_serial",
+            "barcode_value",
+            "qr_identifier",
+            "acquired_on",
+            "procurement_receipt_reference",
+            "purchase_order_reference",
+            "status",
+            "condition",
+            "current_custody_type",
+            "current_warehouse",
+            "current_branch",
+            "current_site",
+            "current_employee",
+            "current_vehicle",
+            "warranty_expires_on",
+            "expected_retirement_on",
+            "retired_on",
+            "disposal_date",
+            "notes",
+            "created_at",
+            "updated_at",
+        )
         read_only_fields = (
             "id",
             "company",
@@ -134,7 +274,7 @@ class AssetFinancialSerializer(AssetSerializer):
 
     class Meta:
         model = Asset
-        fields = "__all__"
+        fields = AssetSerializer.Meta.fields + ("acquisition_cost",)
         read_only_fields = AssetSerializer.Meta.read_only_fields
 
     def to_representation(self, instance: Asset) -> dict[str, object]:
@@ -153,16 +293,50 @@ class AssetFinancialSerializer(AssetSerializer):
 class AssetIssueLineSerializer(serializers.ModelSerializer[AssetIssueLine]):
     class Meta:
         model = AssetIssueLine
-        fields = "__all__"
-        read_only_fields = ("returned_quantity", "issued_quantity")
+        fields = (
+            "id",
+            "asset_issue",
+            "item",
+            "serialized_asset",
+            "stock_account",
+            "requested_quantity",
+            "approved_quantity",
+            "issued_quantity",
+            "returned_quantity",
+            "condition_at_issue",
+            "notes",
+            "created_at",
+        )
+        read_only_fields = fields
 
 
-class AssetIssueSerializer(serializers.ModelSerializer[AssetIssue]):
+class AssetIssueSerializer(TenantSafeAssetSerializer):
     lines = AssetIssueLineSerializer(many=True, read_only=True)
 
     class Meta:
         model = AssetIssue
-        fields = "__all__"
+        fields = (
+            "id",
+            "issue_number",
+            "company",
+            "issue_type",
+            "employee",
+            "site",
+            "branch",
+            "vehicle",
+            "requested_by",
+            "approved_by",
+            "approved_at",
+            "issued_by",
+            "issued_at",
+            "expected_return_at",
+            "status",
+            "purpose",
+            "notes",
+            "lines",
+            "created_at",
+            "updated_at",
+        )
         read_only_fields = (
             "id",
             "requested_by",
@@ -176,6 +350,7 @@ class AssetIssueSerializer(serializers.ModelSerializer[AssetIssue]):
         )
 
     def validate(self, attrs: dict[str, object]) -> dict[str, object]:
+        attrs = super().validate(attrs)
         if self.instance is not None:
             protected = {
                 "issue_number",
@@ -208,15 +383,35 @@ class AssetIssueSerializer(serializers.ModelSerializer[AssetIssue]):
 class AssetMovementSerializer(serializers.ModelSerializer[AssetMovement]):
     class Meta:
         model = AssetMovement
-        fields = "__all__"
-        read_only_fields = tuple(field.name for field in AssetMovement._meta.fields)
+        fields = (
+            "id",
+            "asset",
+            "movement_type",
+            "from_custody_type",
+            "from_store",
+            "from_branch",
+            "from_site",
+            "from_employee",
+            "to_custody_type",
+            "to_store",
+            "to_branch",
+            "to_site",
+            "to_employee",
+            "moved_at",
+            "issue",
+            "return_record",
+            "actor",
+            "reason",
+            "created_at",
+        )
+        read_only_fields = fields
 
 
 class StockAccountSerializer(serializers.ModelSerializer[StockAccount]):
     class Meta:
         model = StockAccount
-        fields = "__all__"
-        read_only_fields = tuple(field.name for field in StockAccount._meta.fields)
+        fields = ("id", "company", "item", "store", "branch", "site", "created_at")
+        read_only_fields = fields
 
 
 class ProcurementRegistrationCreateSerializer(serializers.Serializer[dict[str, object]]):

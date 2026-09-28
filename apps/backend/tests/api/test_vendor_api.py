@@ -254,9 +254,9 @@ def test_vendor_payable_account_read_enforces_vendor_company(
     legacy = api.get("/api/v1/finance/domain/vendors/")
 
     assert [row["id"] for row in dedicated.data["results"]] == [str(valid.id)]
-    assert [row["id"] for row in legacy.data] == [str(valid.id)]
+    assert legacy.status_code == 403
     assert api.get(f"/api/v1/finance/vendors/{corrupt.id}/").status_code == 404
-    assert api.get(f"/api/v1/finance/domain/vendors/{corrupt.id}/").status_code == 404
+    assert api.get(f"/api/v1/finance/domain/vendors/{corrupt.id}/").status_code == 403
     serialized = str(dedicated.data) + str(legacy.data)
     assert str(accounts_b["payable"].id) not in serialized
     assert accounts_b["payable"].code not in serialized

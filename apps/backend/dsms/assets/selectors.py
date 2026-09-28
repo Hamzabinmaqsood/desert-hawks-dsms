@@ -20,6 +20,16 @@ from .models import (
     ProcurementInventoryRegistration,
     StockAccount,
 )
+from .tenant_queries import (
+    tenant_consistent_asset_categories,
+    tenant_consistent_asset_issues,
+    tenant_consistent_asset_items,
+    tenant_consistent_asset_movements,
+    tenant_consistent_asset_stores,
+    tenant_consistent_assets,
+    tenant_consistent_procurement_registrations,
+    tenant_consistent_stock_accounts,
+)
 
 
 def procurement_registration_totals(*, handoff: ProcurementInventoryHandoff) -> dict[str, Decimal]:
@@ -41,7 +51,7 @@ def accessible_procurement_registrations(
         user, permission="finance.view_purchasereceipt"
     )
     controlled = accessible_asset_stores(user=user, permission="assets.view_controlled_asset")
-    return (
+    queryset = (
         ProcurementInventoryRegistration.objects.select_related(
             "handoff__asset_item__category",
             "handoff__receipt_line__receipt",
@@ -54,8 +64,8 @@ def accessible_procurement_registrations(
             Q(handoff__asset_item__category__is_controlled=False)
             | Q(destination_store__in=controlled)
         )
-        .order_by("-registered_at")
     )
+    return tenant_consistent_procurement_registrations(queryset).order_by("-registered_at")
 
 
 def _company_scope(user: User, permission: str, *, include_global: bool = False) -> Q:
@@ -102,6 +112,7 @@ def accessible_asset_categories(*, user: User, permission: str) -> QuerySet[Asse
     queryset = AssetCategory.objects.select_related("company").filter(
         _company_scope(user, permission, include_global=True)
     )
+    queryset = tenant_consistent_asset_categories(queryset)
     controlled_scope = _company_scope(user, "assets.view_controlled_asset", include_global=True)
     return queryset.filter(Q(is_controlled=False) | controlled_scope).order_by("pk").distinct()
 
@@ -110,6 +121,7 @@ def accessible_asset_items(*, user: User, permission: str) -> QuerySet[AssetItem
     queryset = AssetItem.objects.select_related("company", "category").filter(
         _company_scope(user, permission, include_global=True)
     )
+    queryset = tenant_consistent_asset_items(queryset)
     controlled_scope = _company_scope(user, "assets.view_controlled_asset", include_global=True)
     return (
         queryset.filter(Q(category__is_controlled=False) | controlled_scope)
@@ -130,14 +142,10 @@ def accessible_asset_stores(*, user: User, permission: str) -> QuerySet[AssetSto
             company_id__in=company_ids,
         )
     )
-    return (
-        AssetStore.objects.select_related(
-            "company", "branch", "operational_zone__branch", "store_manager"
-        )
-        .filter(scope)
-        .order_by("pk")
-        .distinct()
-    )
+    queryset = AssetStore.objects.select_related(
+        "company", "branch", "operational_zone__branch", "store_manager"
+    ).filter(scope)
+    return tenant_consistent_asset_stores(queryset).order_by("pk").distinct()
 
 
 def accessible_assets(*, user: User, permission: str) -> QuerySet[Asset]:
@@ -150,6 +158,7 @@ def accessible_assets(*, user: User, permission: str) -> QuerySet[Asset]:
         "current_employee__branch",
         "current_vehicle",
     ).filter(_asset_location_scope(user, permission))
+    queryset = tenant_consistent_assets(queryset)
     controlled_scope = _asset_location_scope(user, "assets.view_controlled_asset")
     return (
         queryset.filter(Q(item__category__is_controlled=False) | controlled_scope)
@@ -162,6 +171,7 @@ def accessible_stock_accounts(*, user: User, permission: str) -> QuerySet[StockA
     queryset = StockAccount.objects.select_related(
         "company", "item__category", "store__branch", "branch__region", "site__managing_branch"
     ).filter(_location_scope(user, permission))
+    queryset = tenant_consistent_stock_accounts(queryset)
     controlled_branches = access.get_accessible_branch_ids(
         user, permission="assets.view_controlled_asset"
     )
@@ -209,7 +219,7 @@ def accessible_asset_issues(*, user: User, permission: str) -> QuerySet[AssetIss
         | Q(company_id__in=controlled_companies)
     )
     controlled_issues = AssetIssue.objects.filter(lines__item__category__is_controlled=True)
-    return (
+    queryset = (
         AssetIssue.objects.select_related(
             "company",
             "employee__branch",
@@ -222,9 +232,8 @@ def accessible_asset_issues(*, user: User, permission: str) -> QuerySet[AssetIss
         .prefetch_related("lines__item__category")
         .filter(scope)
         .filter(~Q(pk__in=controlled_issues) | controlled_scope)
-        .order_by("pk")
-        .distinct()
     )
+    return tenant_consistent_asset_issues(queryset).order_by("pk").distinct()
 
 
 def accessible_asset_movements(*, user: User, permission: str) -> QuerySet[AssetMovement]:
@@ -246,7 +255,7 @@ def accessible_asset_movements(*, user: User, permission: str) -> QuerySet[Asset
         | Q(to_store__branch_id__in=branch_ids)
     )
     controlled_scope = _asset_location_scope(user, "assets.view_controlled_asset")
-    return (
+    queryset = (
         AssetMovement.objects.select_related(
             "asset__item__category",
             "actor",
@@ -260,9 +269,8 @@ def accessible_asset_movements(*, user: User, permission: str) -> QuerySet[Asset
             Q(asset__item__category__is_controlled=False)
             | Q(asset__in=Asset.objects.filter(controlled_scope))
         )
-        .order_by("-moved_at")
-        .distinct()
     )
+    return tenant_consistent_asset_movements(queryset).order_by("-moved_at").distinct()
 
 
 def asset_scope_kwargs(asset: Asset) -> dict[str, Any]:

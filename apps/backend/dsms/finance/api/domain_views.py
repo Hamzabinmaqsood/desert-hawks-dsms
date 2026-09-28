@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import BasePermission
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -168,8 +168,16 @@ class FinanceAPIView(APIView):
     serializer_class = FinanceResponseSerializer
 
 
+class IsPlatformFinanceAdmin(BasePermission):
+    """Keep the legacy model-meta Finance surface out of tenant applications."""
+
+    def has_permission(self, request: Request, view: APIView) -> bool:
+        user = request.user
+        return bool(user and user.is_authenticated and user.is_active and user.is_superuser)
+
+
 class DomainCollectionView(FinanceAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsPlatformFinanceAdmin]
 
     def _context(self, request: Request, resource: str) -> tuple[type[models.Model], str, set[Any]]:
         model = DOMAIN_MODELS.get(resource)
@@ -243,7 +251,7 @@ class DomainCollectionView(FinanceAPIView):
 
 
 class DomainDetailView(FinanceAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsPlatformFinanceAdmin]
 
     @extend_schema(operation_id="finance_domain_detail_retrieve")
     def get(self, request: Request, resource: str, pk: UUID) -> Response:
@@ -386,7 +394,7 @@ class PayrollActionView(FinanceAPIView):
 
 
 class FinanceActionView(FinanceAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsPlatformFinanceAdmin]
 
     @extend_schema(operation_id="finance_domain_action_execute")
     def post(self, request: Request, resource: str, pk: UUID, action: str) -> Response:

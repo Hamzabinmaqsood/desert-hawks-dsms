@@ -269,7 +269,7 @@ def test_store_create_rejects_cross_scope_target() -> None:
         },
         format="json",
     )
-    assert response.status_code == 403
+    assert response.status_code == 400
     assert not AssetStore.objects.filter(code="CROSS-SCOPE").exists()
 
 
