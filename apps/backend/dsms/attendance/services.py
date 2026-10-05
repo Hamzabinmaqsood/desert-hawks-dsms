@@ -44,6 +44,15 @@ from .models import (
     AttendanceRecord,
     AttendanceVerification,
 )
+from .tenant_queries import (
+    consistent_attendance_events,
+    consistent_attendance_periods,
+    consistent_attendance_policies,
+    consistent_attendance_records,
+    consistent_duty_assignments,
+    consistent_payroll_exports,
+    consistent_qr_stations,
+)
 
 
 @dataclass(frozen=True)
@@ -64,8 +73,8 @@ def resolve_attendance_policy(
     at_datetime: datetime,
 ) -> AttendancePolicy | None:
     day = at_datetime.date()
-    policies = AttendancePolicy.objects.filter(
-        company=company, is_active=True, effective_from__lte=day
+    policies = consistent_attendance_policies(
+        AttendancePolicy.objects.filter(company=company, is_active=True, effective_from__lte=day)
     ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=day))
     for filters in (
         {"post": post},
@@ -121,6 +130,7 @@ def evaluate_geofence(
 
 
 def generate_qr_station_token(*, station: AttendanceQRStation) -> str:
+    station = consistent_qr_stations(AttendanceQRStation.objects.all()).get(pk=station.pk)
     token = secrets.token_urlsafe(32)
     station.token_hash = make_password(token)
     station.token_hint = token[-6:]
@@ -138,7 +148,9 @@ def verify_attendance_qr(
 ) -> bool:
     now = timezone.now()
     return bool(
-        station.status == QRStationStatus.ACTIVE
+        station.company.is_active
+        and station.company_id == site.company_id
+        and station.status == QRStationStatus.ACTIVE
         and station.revoked_at is None
         and (station.expires_at is None or station.expires_at >= now)
         and station.site_id == site.id
@@ -158,17 +170,15 @@ def check_in_for_duty(
     client_event_id=None,
     device_metadata: dict | None = None,
 ) -> AttendanceRecord:
-    assignment = (
-        DutyAssignment.objects.select_for_update(of=("self",))
-        .select_related(
+    assignment = consistent_duty_assignments(
+        DutyAssignment.objects.select_for_update(of=("self",)).select_related(
             "employee__user",
             "duty_shift__roster_period",
             "duty_shift__site__client",
             "duty_shift__site__contract",
             "duty_shift__post",
         )
-        .get(pk=duty_assignment.pk)
-    )
+    ).get(pk=duty_assignment.pk)
     if assignment.employee.user_id != user.id:
         raise AttendancePermissionError(
             "A user may only check in for their linked employee record."
@@ -182,7 +192,9 @@ def check_in_for_duty(
     }:
         raise AttendanceValidationError("Assignment is not available for attendance.")
     if client_event_id and (
-        existing := AttendanceEvent.objects.filter(client_event_id=client_event_id)
+        existing := consistent_attendance_events(
+            AttendanceEvent.objects.filter(client_event_id=client_event_id, actor_user=user)
+        )
         .select_related("attendance_record")
         .first()
     ):
@@ -210,6 +222,14 @@ def check_in_for_duty(
             "scheduled_end_at": shift.ends_at,
         },
     )
+    consistent_record = (
+        consistent_attendance_records(AttendanceRecord.objects.select_for_update(of=("self",)))
+        .filter(pk=record.pk)
+        .first()
+    )
+    if consistent_record is None:
+        raise AttendanceValidationError("Existing attendance data is tenant-inconsistent.")
+    record = consistent_record
     event = AttendanceEvent.objects.create(
         attendance_record=record,
         event_type=AttendanceEventType.CHECK_IN,
@@ -248,10 +268,18 @@ def check_in_for_duty(
         )
         verified &= result.result == VerificationResult.PASSED
     if policy.require_qr:
+        station = None
+        if qr:
+            station = (
+                consistent_qr_stations(AttendanceQRStation.objects.all())
+                .filter(pk=qr["station_id"], company=shift.company, site=shift.site)
+                .first()
+            )
         qr_valid = bool(
             qr
+            and station
             and verify_attendance_qr(
-                station=AttendanceQRStation.objects.get(pk=qr["station_id"]),
+                station=station,
                 submitted_token=qr["token"],
                 site=shift.site,
                 post=shift.post,
@@ -300,20 +328,22 @@ def check_in_for_duty(
 def check_out_from_duty(
     *, user: User, duty_assignment: DutyAssignment, event_time: datetime, client_event_id=None
 ) -> AttendanceRecord:
-    assignment = (
-        DutyAssignment.objects.select_for_update(of=("self",))
-        .select_related("employee__user")
-        .get(pk=duty_assignment.pk)
-    )
+    assignment = consistent_duty_assignments(
+        DutyAssignment.objects.select_for_update(of=("self",)).select_related("employee__user")
+    ).get(pk=duty_assignment.pk)
     if assignment.employee.user_id != user.id:
         raise AttendancePermissionError("A user may only check out their linked employee record.")
     if client_event_id and (
-        existing := AttendanceEvent.objects.filter(client_event_id=client_event_id)
+        existing := consistent_attendance_events(
+            AttendanceEvent.objects.filter(client_event_id=client_event_id, actor_user=user)
+        )
         .select_related("attendance_record")
         .first()
     ):
         return existing.attendance_record
-    record = AttendanceRecord.objects.select_for_update().get(duty_assignment=assignment)
+    record = consistent_attendance_records(
+        AttendanceRecord.objects.select_for_update(of=("self",))
+    ).get(duty_assignment=assignment)
     if not record.actual_check_in_at or record.actual_check_out_at:
         raise AttendanceValidationError("A single prior check-in is required.")
     AttendanceEvent.objects.create(
@@ -355,16 +385,20 @@ def check_out_from_duty(
 
 @transaction.atomic
 def generate_expected_attendance(*, attendance_period: AttendancePeriod) -> int:
-    period = AttendancePeriod.objects.select_for_update().get(pk=attendance_period.pk)
+    period = consistent_attendance_periods(
+        AttendancePeriod.objects.select_for_update(of=("self",))
+    ).get(pk=attendance_period.pk)
     if period.status not in {AttendancePeriodStatus.OPEN, AttendancePeriodStatus.UNDER_REVIEW}:
         raise AttendanceValidationError(
             "Expected attendance can only be generated in an open period."
         )
-    assignments = DutyAssignment.objects.filter(
-        duty_shift__roster_period__status__in=[RosterStatus.PUBLISHED, RosterStatus.LOCKED],
-        duty_shift__duty_date__range=(period.period_start, period.period_end),
-        status__in=[DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED],
-    ).select_related("employee", "duty_shift")
+    assignments = consistent_duty_assignments(
+        DutyAssignment.objects.filter(
+            duty_shift__roster_period__status__in=[RosterStatus.PUBLISHED, RosterStatus.LOCKED],
+            duty_shift__duty_date__range=(period.period_start, period.period_end),
+            status__in=[DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED],
+        ).select_related("employee", "duty_shift")
+    )
     if period.company_id:
         assignments = assignments.filter(duty_shift__company=period.company)
     if period.branch_id:
@@ -402,7 +436,9 @@ def generate_expected_attendance(*, attendance_period: AttendancePeriod) -> int:
 
 @transaction.atomic
 def verify_attendance(*, record: AttendanceRecord, actor: User) -> AttendanceRecord:
-    obj = AttendanceRecord.objects.select_for_update().get(pk=record.pk)
+    obj = consistent_attendance_records(
+        AttendanceRecord.objects.select_for_update(of=("self",))
+    ).get(pk=record.pk)
     if obj.status in {AttendanceRecordStatus.LOCKED, AttendanceRecordStatus.PENDING}:
         raise AttendanceValidationError("Attendance is not ready for supervisor verification.")
     obj.status, obj.reviewed_by, obj.reviewed_at = (
@@ -439,7 +475,9 @@ def request_attendance_correction(
     proposed_approved_worked_minutes=None,
     proposed_overtime_minutes=None,
 ) -> AttendanceCorrectionRequest:
-    obj = AttendanceRecord.objects.select_for_update().get(pk=record.pk)
+    obj = consistent_attendance_records(
+        AttendanceRecord.objects.select_for_update(of=("self",))
+    ).get(pk=record.pk)
     if obj.status == AttendanceRecordStatus.LOCKED:
         raise AttendanceValidationError(
             "Locked attendance requires a post-lock adjustment workflow."
@@ -470,7 +508,9 @@ def approve_attendance_correction(
         .select_related("attendance_record")
         .get(pk=correction.pk)
     )
-    record = AttendanceRecord.objects.select_for_update().get(pk=item.attendance_record_id)
+    record = consistent_attendance_records(
+        AttendanceRecord.objects.select_for_update(of=("self",))
+    ).get(pk=item.attendance_record_id)
     if item.status != CorrectionStatus.SUBMITTED or item.requested_by_id == actor.id:
         raise AttendanceValidationError("A submitted correction requires an independent checker.")
     if record.status == AttendanceRecordStatus.LOCKED:
@@ -518,7 +558,9 @@ def approve_attendance_correction(
 
 @transaction.atomic
 def approve_attendance_period(*, period: AttendancePeriod, actor: User) -> AttendancePeriod:
-    obj = AttendancePeriod.objects.select_for_update().get(pk=period.pk)
+    obj = consistent_attendance_periods(
+        AttendancePeriod.objects.select_for_update(of=("self",))
+    ).get(pk=period.pk)
     if obj.status not in {AttendancePeriodStatus.OPEN, AttendancePeriodStatus.UNDER_REVIEW}:
         raise AttendanceValidationError("Attendance period is not reviewable.")
     if obj.submitted_by_id == actor.id:
@@ -533,7 +575,10 @@ def approve_attendance_period(*, period: AttendancePeriod, actor: User) -> Atten
         ]
     ).exists():
         raise AttendanceValidationError("Unresolved attendance records prevent approval.")
-    for record in obj.records.exclude(outcome=AttendanceOutcome.EXCUSED).select_for_update():
+    records = consistent_attendance_records(obj.records.select_for_update(of=("self",)))
+    if records.count() != obj.records.count():
+        raise AttendanceValidationError("Attendance period contains inconsistent records.")
+    for record in records.exclude(outcome=AttendanceOutcome.EXCUSED):
         record.status = AttendanceRecordStatus.APPROVED
         record.approved_by, record.approved_at = actor, timezone.now()
         record.approved_check_in_at = record.approved_check_in_at or record.actual_check_in_at
@@ -562,10 +607,15 @@ def approve_attendance_period(*, period: AttendancePeriod, actor: User) -> Atten
 
 @transaction.atomic
 def lock_attendance_period(*, period: AttendancePeriod, actor: User) -> AttendancePeriod:
-    obj = AttendancePeriod.objects.select_for_update().get(pk=period.pk)
+    obj = consistent_attendance_periods(
+        AttendancePeriod.objects.select_for_update(of=("self",))
+    ).get(pk=period.pk)
     if obj.status != AttendancePeriodStatus.APPROVED:
         raise AttendanceValidationError("Only an approved attendance period may be locked.")
-    obj.records.update(status=AttendanceRecordStatus.LOCKED, locked_at=timezone.now())
+    records = consistent_attendance_records(obj.records.all())
+    if records.count() != obj.records.count():
+        raise AttendanceValidationError("Attendance period contains inconsistent records.")
+    records.update(status=AttendanceRecordStatus.LOCKED, locked_at=timezone.now())
     obj.status, obj.locked_by, obj.locked_at = AttendancePeriodStatus.LOCKED, actor, timezone.now()
     obj.save(update_fields=["status", "locked_by", "locked_at", "updated_at"])
     record_audit_event(
@@ -585,10 +635,21 @@ def lock_attendance_period(*, period: AttendancePeriod, actor: User) -> Attendan
 def build_payroll_timekeeping_input(
     *, attendance_period: AttendancePeriod, payroll_period, employee, actor: User
 ):
-    period = AttendancePeriod.objects.select_for_update().get(pk=attendance_period.pk)
+    period = consistent_attendance_periods(
+        AttendancePeriod.objects.select_for_update(of=("self",))
+    ).get(pk=attendance_period.pk)
     if period.status != AttendancePeriodStatus.LOCKED:
         raise AttendanceValidationError("Only locked attendance may be exported to payroll.")
-    records = period.records.filter(employee=employee, status=AttendanceRecordStatus.LOCKED)
+    if (
+        payroll_period.company_id != period.company_id
+        or employee.company_id != period.company_id
+        or (employee.branch_id is not None and employee.branch.company_id != period.company_id)
+        or not period.company.is_active
+    ):
+        raise AttendanceValidationError("Payroll export relations must belong to one Company.")
+    records = consistent_attendance_records(period.records.all()).filter(
+        employee=employee, status=AttendanceRecordStatus.LOCKED
+    )
     scheduled = sum(
         max(int((r.scheduled_end_at - r.scheduled_start_at).total_seconds() // 60), 0)
         for r in records
@@ -644,7 +705,9 @@ def build_payroll_timekeeping_input(
 
 @transaction.atomic
 def flag_post_lock_adjustment(*, record: AttendanceRecord, actor: User, reason: str) -> None:
-    obj = AttendanceRecord.objects.select_for_update().get(pk=record.pk)
+    obj = consistent_attendance_records(
+        AttendanceRecord.objects.select_for_update(of=("self",))
+    ).get(pk=record.pk)
     if obj.status != AttendanceRecordStatus.LOCKED:
         raise AttendanceValidationError("Only locked attendance uses the adjustment handoff.")
     AttendanceChangeEvent.objects.create(
@@ -655,8 +718,10 @@ def flag_post_lock_adjustment(*, record: AttendanceRecord, actor: User, reason: 
         reason=reason,
     )
     if obj.attendance_period_id:
-        AttendancePayrollExport.objects.filter(
-            attendance_period_id=obj.attendance_period_id, employee=obj.employee
+        consistent_payroll_exports(
+            AttendancePayrollExport.objects.filter(
+                attendance_period_id=obj.attendance_period_id, employee=obj.employee
+            )
         ).update(adjustment_required=True)
     record_audit_event(
         action="PAYROLL_ADJUSTMENT_REQUIRED",

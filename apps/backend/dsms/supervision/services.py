@@ -1,4 +1,4 @@
-# mypy: disable-error-code="no-untyped-def,type-arg,var-annotated,misc"
+# mypy: disable-error-code="no-untyped-def,type-arg,var-annotated,misc,no-untyped-call"
 from __future__ import annotations
 
 import hashlib
@@ -7,10 +7,14 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from django.db import models, transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from dsms.attendance.models import AttendanceRecord
+from dsms.attendance.tenant_queries import (
+    consistent_attendance_records,
+    consistent_duty_assignments,
+)
 from dsms.contracts.models import SecurityPost, SecuritySite
 from dsms.deployment.models import DutyAssignment
 from dsms.identity.models import User
@@ -27,14 +31,36 @@ from .models import (
     SupervisorVisitPlan,
     VisitFrequencyRequirement,
 )
+from .tenant_queries import (
+    consistent_assignments,
+    consistent_corrective_actions,
+    consistent_frequency_requirements,
+    consistent_inspections,
+    consistent_responses,
+    consistent_site_visits,
+    consistent_visit_plans,
+)
+
+
+def _consistent_sites(queryset):
+    return queryset.filter(
+        company__is_active=True,
+        client__company_id=F("company_id"),
+        contract__company_id=F("company_id"),
+        contract__client_id=F("client_id"),
+        managing_branch__company_id=F("company_id"),
+    )
 
 
 def has_site_responsibility(
     supervisor: Employee, site: SecuritySite, on_date: date | None = None
 ) -> bool:
     day = on_date or timezone.localdate()
+    if not _consistent_sites(SecuritySite.objects.all()).filter(pk=site.pk).exists():
+        return False
     return (
-        SupervisionAssignment.objects.filter(
+        consistent_assignments(SupervisionAssignment.objects.all())
+        .filter(
             supervisor=supervisor,
             company=site.company,
             branch=site.managing_branch,
@@ -72,6 +98,10 @@ def start_site_visit(
     visit_plan: SupervisorVisitPlan | None = None,
     gps: dict | None = None,
 ) -> SiteVisit:
+    site = _consistent_sites(SecuritySite.objects.all()).get(pk=site.pk)
+    supervisor = Employee.objects.select_related("company", "user").get(pk=supervisor.pk)
+    if supervisor.company_id != site.company_id or not supervisor.company.is_active:
+        raise SupervisionValidationError("Supervisor and site must belong to one active Company.")
     if supervisor.user_id != actor.id and not actor.has_perm("supervision.start_site_visit"):
         raise SupervisionPermissionError("Actor cannot start a visit for this supervisor.")
     if not has_site_responsibility(supervisor, site):
@@ -119,8 +149,13 @@ def start_site_visit(
         **values,
     )
     if visit_plan:
+        visit_plan = consistent_visit_plans(
+            SupervisorVisitPlan.objects.select_for_update(of=("self",))
+        ).get(pk=visit_plan.pk)
         if (
-            visit_plan.supervisor_id != supervisor.id
+            visit_plan.company_id != site.company_id
+            or visit_plan.branch_id != site.managing_branch_id
+            or visit_plan.supervisor_id != supervisor.id
             or visit_plan.site_id != site.id
             or visit_plan.status not in {"DRAFT", "SCHEDULED"}
         ):
@@ -134,7 +169,9 @@ def start_site_visit(
 def end_site_visit(
     *, visit: SiteVisit, actor: User, summary: str = "", gps: dict | None = None
 ) -> SiteVisit:
-    visit = SiteVisit.objects.select_for_update().get(pk=visit.pk)
+    visit = consistent_site_visits(SiteVisit.objects.select_for_update(of=("self",))).get(
+        pk=visit.pk
+    )
     if visit.status != "IN_PROGRESS":
         raise SupervisionValidationError("Only an open visit can be ended.")
     if visit.supervisor.user_id != actor.id and not actor.has_perm("supervision.end_site_visit"):
@@ -142,7 +179,9 @@ def end_site_visit(
     visit.ended_at, visit.visit_summary = timezone.now(), summary
     visit.status = (
         "COMPLETED"
-        if visit.inspections.filter(status__in=["SUBMITTED", "REVIEWED", "CLOSED"]).exists()
+        if consistent_inspections(visit.inspections.all())
+        .filter(status__in=["SUBMITTED", "REVIEWED", "CLOSED"])
+        .exists()
         else "INCOMPLETE"
     )
     if gps:
@@ -158,15 +197,18 @@ def end_site_visit(
 
 @transaction.atomic
 def submit_inspection(*, inspection: SiteInspection) -> SiteInspection:
-    inspection = (
-        SiteInspection.objects.select_for_update()
-        .prefetch_related("responses__template_item", "responses__selected_option")
-        .get(pk=inspection.pk)
-    )
+    inspection = consistent_inspections(
+        SiteInspection.objects.select_for_update(of=("self",)).prefetch_related(
+            "responses__template_item", "responses__selected_option"
+        )
+    ).get(pk=inspection.pk)
     if inspection.status not in {"DRAFT", "IN_PROGRESS"}:
         raise SupervisionValidationError("Inspection is already finalized.")
     required = set(inspection.template.sections.values_list("items__id", flat=True).filter())
-    responses = list(inspection.responses.all())
+    responses_queryset = consistent_responses(inspection.responses.all())
+    if responses_queryset.count() != inspection.responses.count():
+        raise SupervisionValidationError("Inspection contains tenant-inconsistent responses.")
+    responses = list(responses_queryset)
     if required - {
         response.template_item_id for response in responses if response.template_item.is_required
     }:
@@ -217,14 +259,35 @@ def verify_guard_during_visit(
     observed_at: datetime,
     actor: User,
 ) -> dict:
+    site_visit = consistent_site_visits(SiteVisit.objects.all()).get(pk=site_visit.pk)
+    if (
+        not site_visit.company.is_active
+        or post.company_id != site_visit.company_id
+        or post.site_id != site_visit.site_id
+        or post.client_id != site_visit.site.client_id
+        or (
+            employee is not None
+            and (
+                employee.company_id != site_visit.company_id
+                or (
+                    employee.branch_id is not None
+                    and employee.branch is not None
+                    and employee.branch.company_id != site_visit.company_id
+                )
+            )
+        )
+    ):
+        raise SupervisionValidationError("Guard verification relations are tenant-inconsistent.")
     if site_visit.status != "IN_PROGRESS" or post.site_id != site_visit.site_id:
         raise SupervisionValidationError("Guard verification must occur at the active visit site.")
-    assignments = DutyAssignment.objects.filter(
-        duty_shift__site=site_visit.site,
-        duty_shift__post=post,
-        duty_shift__starts_at__lte=observed_at,
-        duty_shift__ends_at__gte=observed_at,
-    ).select_related("employee")
+    assignments = consistent_duty_assignments(
+        DutyAssignment.objects.filter(
+            duty_shift__site=site_visit.site,
+            duty_shift__post=post,
+            duty_shift__starts_at__lte=observed_at,
+            duty_shift__ends_at__gte=observed_at,
+        ).select_related("employee")
+    )
     expected = assignments.filter(employee=employee).first() if employee else assignments.first()
     if employee and expected:
         verification, observation = "MATCHED", "PRESENT_AS_SCHEDULED"
@@ -237,7 +300,11 @@ def verify_guard_during_visit(
     else:
         verification, observation = "NO_ACTIVE_ASSIGNMENT", "UNABLE_TO_VERIFY"
     attendance = (
-        AttendanceRecord.objects.filter(duty_assignment=expected).first() if expected else None
+        consistent_attendance_records(
+            AttendanceRecord.objects.filter(duty_assignment=expected)
+        ).first()
+        if expected
+        else None
     )
     GuardObservation.objects.create(
         company=site_visit.company,
@@ -265,7 +332,7 @@ def verify_guard_during_visit(
 def mark_missed_visits(*, at: datetime | None = None) -> int:
     now = at or timezone.now()
     return (
-        SupervisorVisitPlan.objects.filter(status="SCHEDULED")
+        consistent_visit_plans(SupervisorVisitPlan.objects.filter(status="SCHEDULED"))
         .filter(
             Q(planned_end_at__lt=now) | Q(planned_end_at__isnull=True, planned_date__lt=now.date())
         )
@@ -277,7 +344,9 @@ def mark_missed_visits(*, at: datetime | None = None) -> int:
 def transition_corrective_action(
     *, action: CorrectiveAction, actor: User, target: str, notes: str = ""
 ) -> CorrectiveAction:
-    action = CorrectiveAction.objects.select_for_update().get(pk=action.pk)
+    action = consistent_corrective_actions(
+        CorrectiveAction.objects.select_for_update(of=("self",))
+    ).get(pk=action.pk)
     allowed = {
         "OPEN": {"ASSIGNED", "CANCELLED"},
         "ASSIGNED": {"IN_PROGRESS", "CANCELLED"},
@@ -306,11 +375,15 @@ def generate_supervisor_visit_plan(
 ):
     if date_to < date_from:
         raise SupervisionValidationError("Invalid planning range.")
-    assignments = SupervisionAssignment.objects.filter(
-        supervisor=supervisor, status="ACTIVE", effective_from__lte=date_to
-    ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=date_from))
-    sites = SecuritySite.objects.filter(
-        Q(supervisionassignment__in=[]) if False else Q(company=supervisor.company)
+    assignments = consistent_assignments(
+        SupervisionAssignment.objects.filter(
+            supervisor=supervisor, status="ACTIVE", effective_from__lte=date_to
+        ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=date_from))
+    )
+    sites = _consistent_sites(
+        SecuritySite.objects.filter(
+            Q(supervisionassignment__in=[]) if False else Q(company=supervisor.company)
+        )
     )
     site_ids = set()
     for assignment in assignments:
@@ -322,10 +395,12 @@ def generate_supervisor_visit_plan(
         site_ids.update(query.values_list("id", flat=True))
     plans = []
     actor = created_by or supervisor.user
-    for site in SecuritySite.objects.filter(id__in=site_ids):
+    for site in _consistent_sites(SecuritySite.objects.filter(id__in=site_ids)):
         rule = (
-            VisitFrequencyRequirement.objects.filter(
-                company=site.company, is_active=True, effective_from__lte=date_to
+            consistent_frequency_requirements(
+                VisitFrequencyRequirement.objects.filter(
+                    company=site.company, is_active=True, effective_from__lte=date_to
+                )
             )
             .filter(
                 Q(site=site)

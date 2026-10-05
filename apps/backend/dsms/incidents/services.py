@@ -457,6 +457,25 @@ def _referral_type(company):
 
 @transaction.atomic
 def refer_supervision_finding_to_incident(*, finding, actor, reason):
+    from dsms.supervision.models import InspectionFinding
+    from dsms.supervision.tenant_queries import consistent_findings
+
+    finding = (
+        consistent_findings(
+            InspectionFinding.objects.select_related(
+                "company",
+                "site__managing_branch",
+                "site__client",
+                "site__contract",
+                "post",
+                "inspection__site_visit",
+            )
+        )
+        .filter(pk=finding.pk)
+        .first()
+    )
+    if finding is None:
+        raise IncidentValidationError("Supervision finding is not tenant-consistent.")
     existing = Incident.objects.filter(supervision_finding=finding).first()
     if existing:
         return existing

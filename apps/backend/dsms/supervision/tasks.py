@@ -3,12 +3,13 @@ from celery import shared_task
 from django.utils import timezone
 
 from .models import CorrectiveAction
+from .tenant_queries import consistent_corrective_actions
 
 
 @shared_task
 def detect_overdue_corrective_actions() -> int:
     return (
-        CorrectiveAction.objects.filter(due_at__lt=timezone.now())
+        consistent_corrective_actions(CorrectiveAction.objects.filter(due_at__lt=timezone.now()))
         .exclude(status__in=["VERIFIED", "CLOSED", "CANCELLED", "OVERDUE"])
         .update(status="OVERDUE")
     )
