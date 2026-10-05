@@ -42,6 +42,19 @@ from .models import (
     RosterPeriod,
     SchedulingPolicy,
 )
+from .tenant_queries import (
+    consistent_duty_assignments,
+    consistent_duty_shifts,
+    consistent_employee_deployments,
+    consistent_employees,
+    consistent_posts,
+    consistent_replacement_requests,
+    consistent_rosters,
+    consistent_schedule_blocks,
+    consistent_scheduling_policies,
+    consistent_sites,
+    consistent_staffing_requirements,
+)
 
 
 @dataclass(frozen=True)
@@ -55,11 +68,13 @@ class EligibilityResult:
 
 
 def employee_planned_hours(employee: Employee, date_from: date, date_to: date) -> Decimal:
-    assignments = DutyAssignment.objects.filter(
-        employee=employee,
-        status__in=[DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED],
-        duty_shift__duty_date__range=(date_from, date_to),
-    ).select_related("duty_shift")
+    assignments = consistent_duty_assignments(
+        DutyAssignment.objects.filter(
+            employee=employee,
+            status__in=[DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED],
+            duty_shift__duty_date__range=(date_from, date_to),
+        ).select_related("duty_shift")
+    )
     seconds = sum(
         Decimal(str((item.duty_shift.ends_at - item.duty_shift.starts_at).total_seconds()))
         for item in assignments
@@ -80,8 +95,64 @@ def evaluate_deployment_eligibility(
     moment = as_of_datetime or timezone.now()
     blocking: list[str] = []
     warnings: list[str] = []
+    if not consistent_employees(Employee.objects.all()).filter(pk=employee.pk).exists():
+        return EligibilityResult(
+            employee,
+            EligibilityStatus.INELIGIBLE,
+            ("TENANT_INCONSISTENT",),
+            (),
+            1,
+            Decimal("0"),
+        )
+    if not consistent_sites(SecuritySite.objects.all()).filter(pk=site.pk).exists():
+        return EligibilityResult(
+            employee,
+            EligibilityStatus.INELIGIBLE,
+            ("TENANT_INCONSISTENT",),
+            (),
+            1,
+            Decimal("0"),
+        )
     if employee.company_id != site.company_id:
-        blocking.append("CROSS_COMPANY_MISMATCH")
+        return EligibilityResult(
+            employee,
+            EligibilityStatus.INELIGIBLE,
+            ("CROSS_COMPANY_MISMATCH",),
+            (),
+            1,
+            Decimal("0"),
+        )
+    if post and not (
+        consistent_posts(SecurityPost.objects.all())
+        .filter(pk=post.pk, company=site.company, site=site, client=site.client)
+        .exists()
+    ):
+        return EligibilityResult(
+            employee,
+            EligibilityStatus.INELIGIBLE,
+            ("POST_SITE_MISMATCH",),
+            (),
+            1,
+            Decimal("0"),
+        )
+    if duty_shift and not (
+        consistent_duty_shifts(DutyShift.objects.all())
+        .filter(
+            pk=duty_shift.pk,
+            company=site.company,
+            site=site,
+            **({"post": post} if post is not None else {}),
+        )
+        .exists()
+    ):
+        return EligibilityResult(
+            employee,
+            EligibilityStatus.INELIGIBLE,
+            ("SHIFT_TENANT_INCONSISTENT",),
+            (),
+            1,
+            Decimal("0"),
+        )
     if employee.employment_status != EmploymentStatus.ACTIVE or not employee.is_active:
         blocking.append("EMPLOYEE_INACTIVE")
     if site.client.status != ClientStatus.ACTIVE or site.contract.status != ContractStatus.ACTIVE:
@@ -145,19 +216,23 @@ def evaluate_deployment_eligibility(
             blocking.append("EMPLOYEE_TYPE_MISMATCH")
         if duty_shift.designation_id and employee.designation_id != duty_shift.designation_id:
             blocking.append("DESIGNATION_MISMATCH")
-        if EmployeeScheduleBlock.objects.filter(
-            employee=employee,
-            is_active=True,
-            starts_at__lt=duty_shift.ends_at,
-            ends_at__gt=duty_shift.starts_at,
+        if consistent_schedule_blocks(
+            EmployeeScheduleBlock.objects.filter(
+                employee=employee,
+                is_active=True,
+                starts_at__lt=duty_shift.ends_at,
+                ends_at__gt=duty_shift.starts_at,
+            )
         ).exists():
             blocking.append("SCHEDULE_BLOCK")
         if (
-            DutyAssignment.objects.filter(
-                employee=employee,
-                status__in=[DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED],
-                duty_shift__starts_at__lt=duty_shift.ends_at,
-                duty_shift__ends_at__gt=duty_shift.starts_at,
+            consistent_duty_assignments(
+                DutyAssignment.objects.filter(
+                    employee=employee,
+                    status__in=[DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED],
+                    duty_shift__starts_at__lt=duty_shift.ends_at,
+                    duty_shift__ends_at__gt=duty_shift.starts_at,
+                )
             )
             .exclude(duty_shift=duty_shift)
             .exists()
@@ -165,7 +240,9 @@ def evaluate_deployment_eligibility(
             blocking.append("SHIFT_OVERLAP")
         week_start = duty_shift.duty_date - timedelta(days=duty_shift.duty_date.weekday())
         planned = employee_planned_hours(employee, week_start, week_start + timedelta(days=6))
-        policy = SchedulingPolicy.objects.filter(company=employee.company, is_active=True).first()
+        policy = consistent_scheduling_policies(
+            SchedulingPolicy.objects.filter(company=employee.company, is_active=True)
+        ).first()
         if employee.branch_id != duty_shift.branch_id and not (
             policy and policy.allow_cross_branch_deployment
         ):
@@ -198,15 +275,20 @@ def evaluate_deployment_eligibility(
 def generate_roster_demand(
     *, roster_period: RosterPeriod, actor: User | None = None
 ) -> dict[str, int]:
-    roster = RosterPeriod.objects.select_for_update().get(pk=roster_period.pk)
+    roster = consistent_rosters(RosterPeriod.objects.select_for_update(of=("self",))).get(
+        pk=roster_period.pk
+    )
     if roster.status not in {RosterStatus.DRAFT, RosterStatus.GENERATED}:
         raise RosterTransitionError("Only draft/generated rosters accept demand generation.")
     generated = skipped = 0
     day = roster.period_start
     while day <= roster.period_end:
-        for requirement in get_active_staffing_requirements(
-            on_date=day, company=roster.company, branch=roster.branch
-        ):
+        requirements = consistent_staffing_requirements(
+            get_active_staffing_requirements(
+                on_date=day, company=roster.company, branch=roster.branch
+            )
+        )
+        for requirement in requirements:
             if (
                 requirement.days.exists()
                 and not requirement.days.filter(weekday=day.strftime("%A").upper()).exists()
@@ -266,13 +348,17 @@ def assign_employee_to_shift(
     assignment_type: str = AssignmentType.REGULAR,
     allow_overstaffing: bool = False,
 ) -> DutyAssignment:
-    shift = (
-        DutyShift.objects.select_for_update()
-        .select_related("site__client", "site__contract", "post", "roster_period")
-        .get(pk=duty_shift.pk)
-    )
+    shift = consistent_duty_shifts(
+        DutyShift.objects.select_for_update(of=("self",)).select_related(
+            "site__client", "site__contract", "post", "roster_period"
+        )
+    ).get(pk=duty_shift.pk)
     # Serialize all assignment decisions for this employee, even across different shifts.
-    employee = Employee.objects.select_for_update().get(pk=employee.pk)
+    employee = consistent_employees(Employee.objects.select_for_update(of=("self",))).get(
+        pk=employee.pk
+    )
+    if employee.company_id != shift.company_id:
+        raise IneligibleEmployee("CROSS_COMPANY_MISMATCH")
     if shift.roster_period.status in {
         RosterStatus.PUBLISHED,
         RosterStatus.LOCKED,
@@ -281,8 +367,10 @@ def assign_employee_to_shift(
         raise RosterTransitionError(
             "Published or locked rosters require a controlled change workflow."
         )
-    assigned = shift.assignments.filter(
-        status__in=[DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED]
+    assigned = consistent_duty_assignments(
+        shift.assignments.filter(
+            status__in=[DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED]
+        )
     ).count()
     if assigned >= shift.required_headcount and not allow_overstaffing:
         raise AssignmentConflict("Duty shift required headcount is already filled.")
@@ -295,8 +383,10 @@ def assign_employee_to_shift(
     )
     if eligibility.status == EligibilityStatus.INELIGIBLE:
         raise IneligibleEmployee(",".join(eligibility.blocking_reasons))
-    deployment = EmployeeDeployment.objects.filter(
-        employee=employee, site=shift.site, status=DeploymentStatus.ACTIVE
+    deployment = consistent_employee_deployments(
+        EmployeeDeployment.objects.filter(
+            employee=employee, site=shift.site, status=DeploymentStatus.ACTIVE
+        )
     ).first()
     assignment = DutyAssignment.objects.create(
         duty_shift=shift,
@@ -322,13 +412,23 @@ def _roster_event(roster: RosterPeriod, actor: User, kind: str, reason: str = ""
     )
 
 
+def _validate_roster_graph(roster: RosterPeriod) -> None:
+    shifts = consistent_duty_shifts(roster.duty_shifts.all())
+    if shifts.count() != roster.duty_shifts.count():
+        raise RosterTransitionError("Roster contains tenant-inconsistent Duty Shifts.")
+    assignments = DutyAssignment.objects.filter(duty_shift__roster_period=roster)
+    if consistent_duty_assignments(assignments).count() != assignments.count():
+        raise RosterTransitionError("Roster contains tenant-inconsistent Duty Assignments.")
+
+
 @transaction.atomic
 def submit_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
-    obj = RosterPeriod.objects.select_for_update().get(pk=roster.pk)
+    obj = consistent_rosters(RosterPeriod.objects.select_for_update(of=("self",))).get(pk=roster.pk)
     if obj.status not in {RosterStatus.DRAFT, RosterStatus.GENERATED}:
         raise RosterTransitionError("Only a draft/generated roster may be submitted.")
     if not obj.duty_shifts.exists():
         raise RosterTransitionError("A roster without contractual duty shifts cannot be submitted.")
+    _validate_roster_graph(obj)
     obj.status, obj.submitted_by, obj.submitted_at = (
         RosterStatus.UNDER_REVIEW,
         actor,
@@ -340,11 +440,12 @@ def submit_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
 
 @transaction.atomic
 def approve_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
-    obj = RosterPeriod.objects.select_for_update().get(pk=roster.pk)
+    obj = consistent_rosters(RosterPeriod.objects.select_for_update(of=("self",))).get(pk=roster.pk)
     if obj.status != RosterStatus.UNDER_REVIEW:
         raise RosterTransitionError("Only a submitted roster may be approved.")
     if obj.created_by_id == actor.id or obj.submitted_by_id == actor.id:
         raise RosterTransitionError("Roster approval requires an independent checker.")
+    _validate_roster_graph(obj)
     obj.status, obj.approved_by, obj.approved_at = RosterStatus.APPROVED, actor, timezone.now()
     obj.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
     record_audit_event(
@@ -363,12 +464,15 @@ def approve_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
 
 @transaction.atomic
 def publish_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
-    obj = RosterPeriod.objects.select_for_update().get(pk=roster.pk)
+    obj = consistent_rosters(RosterPeriod.objects.select_for_update(of=("self",))).get(pk=roster.pk)
     if obj.status != RosterStatus.APPROVED:
         raise RosterTransitionError("Only an approved roster may be published.")
+    _validate_roster_graph(obj)
     obj.status, obj.published_by, obj.published_at = RosterStatus.PUBLISHED, actor, timezone.now()
     obj.save(update_fields=["status", "published_by", "published_at", "updated_at"])
-    obj.duty_shifts.exclude(status="CANCELLED").update(status="PUBLISHED")
+    consistent_duty_shifts(obj.duty_shifts.all()).exclude(status="CANCELLED").update(
+        status="PUBLISHED"
+    )
     _roster_event(obj, actor, RosterChangeType.PUBLISHED)
     record_audit_event(
         action="ROSTER_PUBLISHED",
@@ -386,9 +490,10 @@ def publish_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
 
 @transaction.atomic
 def lock_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
-    obj = RosterPeriod.objects.select_for_update().get(pk=roster.pk)
+    obj = consistent_rosters(RosterPeriod.objects.select_for_update(of=("self",))).get(pk=roster.pk)
     if obj.status != RosterStatus.PUBLISHED:
         raise RosterTransitionError("Only a published roster may be locked.")
+    _validate_roster_graph(obj)
     obj.status, obj.locked_by, obj.locked_at = RosterStatus.LOCKED, actor, timezone.now()
     obj.save(update_fields=["status", "locked_by", "locked_at", "updated_at"])
     _roster_event(obj, actor, RosterChangeType.LOCKED)
@@ -415,11 +520,9 @@ def create_replacement_request(
     description: str = "",
     priority: str = "NORMAL",
 ) -> ReplacementRequest:
-    assignment = (
-        DutyAssignment.objects.select_for_update()
-        .select_related("duty_shift")
-        .get(pk=original_assignment.pk)
-    )
+    assignment = consistent_duty_assignments(
+        DutyAssignment.objects.select_for_update(of=("self",)).select_related("duty_shift")
+    ).get(pk=original_assignment.pk)
     if assignment.status not in {DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED}:
         raise AssignmentConflict("Only an active assignment can be replaced.")
     request, _ = ReplacementRequest.objects.get_or_create(
@@ -442,17 +545,23 @@ def create_replacement_request(
 def assign_replacement(
     *, replacement_request: ReplacementRequest, employee: Employee, actor: User
 ) -> DutyAssignment:
-    request = (
-        ReplacementRequest.objects.select_for_update()
-        .select_related("duty_shift", "original_assignment")
-        .get(pk=replacement_request.pk)
-    )
+    request = consistent_replacement_requests(
+        ReplacementRequest.objects.select_for_update(of=("self",)).select_related(
+            "duty_shift", "original_assignment"
+        )
+    ).get(pk=replacement_request.pk)
     if request.status not in {"OPEN", "ASSIGNED"}:
         raise AssignmentConflict("Replacement request is no longer open.")
     if not request.original_assignment_id:
         raise AssignmentConflict("A replacement requires an original assignment.")
-    Employee.objects.select_for_update().get(pk=employee.pk)
-    original = DutyAssignment.objects.select_for_update().get(pk=request.original_assignment_id)
+    employee = consistent_employees(Employee.objects.select_for_update(of=("self",))).get(
+        pk=employee.pk
+    )
+    if employee.company_id != request.company_id:
+        raise IneligibleEmployee("CROSS_COMPANY_MISMATCH")
+    original = consistent_duty_assignments(
+        DutyAssignment.objects.select_for_update(of=("self",))
+    ).get(pk=request.original_assignment_id, duty_shift=request.duty_shift)
     eligibility = evaluate_deployment_eligibility(
         employee=employee,
         site=request.duty_shift.site,
@@ -504,17 +613,19 @@ def assign_replacement(
 
 
 def get_shift_coverage(duty_shift: DutyShift) -> dict[str, Decimal | int]:
-    assigned = duty_shift.assignments.filter(
+    shift = consistent_duty_shifts(DutyShift.objects.all()).get(pk=duty_shift.pk)
+    assignments = consistent_duty_assignments(shift.assignments.all())
+    assigned = assignments.filter(
         status__in=[DutyAssignmentStatus.PLANNED, DutyAssignmentStatus.CONFIRMED]
     ).count()
-    confirmed = duty_shift.assignments.filter(status=DutyAssignmentStatus.CONFIRMED).count()
+    confirmed = assignments.filter(status=DutyAssignmentStatus.CONFIRMED).count()
     return {
-        "required_headcount": duty_shift.required_headcount,
+        "required_headcount": shift.required_headcount,
         "assigned_headcount": assigned,
         "confirmed_headcount": confirmed,
-        "shortage": max(duty_shift.required_headcount - assigned, 0),
-        "approved_extra": max(assigned - duty_shift.required_headcount, 0),
+        "shortage": max(shift.required_headcount - assigned, 0),
+        "approved_extra": max(assigned - shift.required_headcount, 0),
         "coverage_percentage": (
-            Decimal(assigned) / Decimal(duty_shift.required_headcount) * 100
+            Decimal(assigned) / Decimal(shift.required_headcount) * 100
         ).quantize(Decimal("0.01")),
     }
