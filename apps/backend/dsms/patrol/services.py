@@ -1,4 +1,5 @@
-# mypy: disable-error-code="no-untyped-def,type-arg,var-annotated,misc,union-attr,arg-type"
+# mypy: disable-error-code="no-untyped-def,no-untyped-call,type-arg,var-annotated,misc,union-attr,arg-type,assignment"
+# ruff: noqa: E501
 import math
 import secrets
 import uuid
@@ -13,6 +14,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from dsms.attendance.models import AttendanceRecord
+from dsms.attendance.tenant_queries import consistent_attendance_records
+from dsms.deployment.tenant_queries import consistent_employees
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.workforce.models import Employee
@@ -28,6 +31,15 @@ from .models import (
     PatrolRun,
     PatrolTask,
 )
+from .tenant_queries import (
+    consistent_checkpoints,
+    consistent_policies,
+    consistent_qr_credentials,
+    consistent_route_checkpoints,
+    consistent_runs,
+    consistent_tasks,
+    consistent_visits,
+)
 
 
 @dataclass(frozen=True)
@@ -40,8 +52,17 @@ def resolve_patrol_policy(
     *, company: Any, branch: Any = None, site: Any = None, at_datetime: Any = None
 ) -> PatrolPolicy | None:
     day = (at_datetime or timezone.now()).date()
-    policies = PatrolPolicy.objects.filter(
-        company=company, is_active=True, effective_from__lte=day
+    if not company or not company.is_active:
+        return None
+    if branch is not None and branch.company_id != company.id:
+        return None
+    if site is not None and (
+        site.company_id != company.id
+        or (branch is not None and site.managing_branch_id != branch.id)
+    ):
+        return None
+    policies = consistent_policies(
+        PatrolPolicy.objects.filter(company=company, is_active=True, effective_from__lte=day)
     ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=day))
     for filters in (
         {"site": site},
@@ -69,6 +90,17 @@ def _distance(
 
 @transaction.atomic
 def rotate_checkpoint_qr(*, checkpoint: PatrolCheckpoint, actor: User, expires_at=None):
+    checkpoint = (
+        consistent_checkpoints(
+            PatrolCheckpoint.objects.select_for_update(of=("self",)).select_related(
+                "company", "site__managing_branch"
+            )
+        )
+        .filter(pk=checkpoint.pk)
+        .first()
+    )
+    if checkpoint is None:
+        raise PatrolValidationError("Checkpoint has an invalid tenant graph.")
     CheckpointQRCredential.objects.select_for_update().filter(
         checkpoint=checkpoint, is_active=True
     ).update(is_active=False, revoked_at=timezone.now())
@@ -89,6 +121,14 @@ def verify_checkpoint_qr(
     *, credential: CheckpointQRCredential, checkpoint: PatrolCheckpoint, token: str
 ) -> bool:
     now = timezone.now()
+    if not consistent_checkpoints(PatrolCheckpoint.objects.all()).filter(pk=checkpoint.pk).exists():
+        return False
+    if (
+        not consistent_qr_credentials(CheckpointQRCredential.objects.all())
+        .filter(pk=credential.pk)
+        .exists()
+    ):
+        return False
     return bool(
         credential.checkpoint_id == checkpoint.id
         and credential.is_active
@@ -102,6 +142,10 @@ def evaluate_patrol_eligibility(
     *, employee: Employee, patrol_task: PatrolTask
 ) -> EligibilityResult:
     reasons = []
+    if not consistent_employees(Employee.objects.all()).filter(pk=employee.pk).exists():
+        return EligibilityResult("INELIGIBLE", ("EMPLOYEE_TENANT_GRAPH_INVALID",))
+    if not consistent_tasks(PatrolTask.objects.all()).filter(pk=patrol_task.pk).exists():
+        return EligibilityResult("INELIGIBLE", ("PATROL_TASK_TENANT_GRAPH_INVALID",))
     if employee.company_id != patrol_task.company_id:
         reasons.append("EMPLOYEE_COMPANY_MISMATCH")
     if employee.employment_status != "ACTIVE":
@@ -126,10 +170,12 @@ def evaluate_patrol_eligibility(
     ):
         reasons.append("DUTY_ASSIGNMENT_REQUIRED")
     if policy and policy.require_employee_attendance_checked_in:
-        attendance = AttendanceRecord.objects.filter(
-            duty_assignment=patrol_task.duty_assignment,
-            actual_check_in_at__isnull=False,
-            actual_check_out_at__isnull=True,
+        attendance = consistent_attendance_records(
+            AttendanceRecord.objects.filter(
+                duty_assignment=patrol_task.duty_assignment,
+                actual_check_in_at__isnull=False,
+                actual_check_out_at__isnull=True,
+            )
         ).exists()
         if not attendance:
             reasons.append("ATTENDANCE_CHECK_IN_REQUIRED")
@@ -138,17 +184,32 @@ def evaluate_patrol_eligibility(
 
 @transaction.atomic
 def assign_employee_to_patrol(*, patrol_task: PatrolTask, employee: Employee, actor: User):
-    task = PatrolTask.objects.select_for_update().get(pk=patrol_task.pk)
+    task = (
+        consistent_tasks(
+            PatrolTask.objects.select_for_update(of=("self",)).select_related("company", "branch")
+        )
+        .filter(pk=patrol_task.pk)
+        .first()
+    )
+    if task is None:
+        raise PatrolValidationError("Patrol task has an invalid tenant graph.")
+    employee = (
+        consistent_employees(Employee.objects.all())
+        .filter(pk=employee.pk, company=task.company)
+        .first()
+    )
+    if employee is None:
+        raise PatrolValidationError("Employee does not belong to the Patrol task Company.")
+    if not access.has_permission(
+        user=actor,
+        permission="patrol.assign_patroltask",
+        company=task.company,
+        branch=task.branch,
+    ):
+        raise PatrolPermissionError("Patrol assignment permission is required.")
     result = evaluate_patrol_eligibility(employee=employee, patrol_task=task)
     if result.status == "INELIGIBLE":
         raise PatrolValidationError(", ".join(result.reasons))
-    if employee.user_id == actor.id and not access.has_permission(
-        user=actor,
-        permission="patrol.assign_patroltask",
-        company=employee.company,
-        branch=employee.branch,
-    ):
-        raise PatrolPermissionError("Employees cannot self-assign patrols.")
     task.assigned_employee = employee
     task.status = "READY"
     task.save()
@@ -166,18 +227,28 @@ def start_patrol(
     device_metadata=None,
 ):
     task = (
-        PatrolTask.objects.select_for_update()
+        consistent_tasks(PatrolTask.objects.select_for_update(of=("self",)))
         .select_related("assigned_employee__user", "site", "branch")
-        .get(pk=patrol_task.pk)
-    )
-    if client_event_id and (
-        event := PatrolEvent.objects.filter(client_event_id=client_event_id)
-        .select_related("patrol_run")
+        .filter(pk=patrol_task.pk)
         .first()
-    ):
-        return event.patrol_run
+    )
+    if task is None:
+        raise PatrolValidationError("Patrol task has an invalid tenant graph.")
     if not task.assigned_employee_id or task.assigned_employee.user_id != actor.id:
         raise PatrolPermissionError("Only the assigned employee may start this patrol.")
+    if client_event_id and (
+        event := PatrolEvent.objects.filter(client_event_id=client_event_id)
+        .select_related("patrol_run__patrol_task")
+        .first()
+    ):
+        if (
+            event.event_type == "START"
+            and event.patrol_run.patrol_task_id == task.id
+            and event.patrol_run.company_id == task.company_id
+            and event.employee_id == task.assigned_employee_id
+        ):
+            return event.patrol_run
+        raise PatrolValidationError("Client event ID belongs to another Patrol operation.")
     if task.status not in {"SCHEDULED", "READY"}:
         raise PatrolValidationError("Patrol task cannot be started.")
     eligibility = evaluate_patrol_eligibility(employee=task.assigned_employee, patrol_task=task)
@@ -201,8 +272,9 @@ def start_patrol(
             )
     elif policy and policy.require_gps:
         raise PatrolValidationError("GPS is required to start this patrol.")
-    mandatory = task.route_version.route_checkpoints.filter(is_mandatory=True).count()
-    total = task.route_version.route_checkpoints.count()
+    route_checkpoints = consistent_route_checkpoints(task.route_version.route_checkpoints.all())
+    mandatory = route_checkpoints.filter(is_mandatory=True).count()
+    total = route_checkpoints.count()
     run = PatrolRun.objects.create(
         patrol_task=task,
         company=task.company,
@@ -246,26 +318,54 @@ def verify_patrol_checkpoint(
     device_metadata=None,
 ):
     run = (
-        PatrolRun.objects.select_for_update()
+        consistent_runs(PatrolRun.objects.select_for_update(of=("self",)))
         .select_related("employee__user", "patrol_task__branch")
-        .get(pk=patrol_run.pk)
+        .filter(pk=patrol_run.pk)
+        .first()
     )
-    if client_event_id and (
-        event := PatrolEvent.objects.filter(client_event_id=client_event_id).first()
-    ):
-        return event.checkpointvisit
+    if run is None:
+        raise PatrolValidationError("Patrol run has an invalid tenant graph.")
     if run.status != "IN_PROGRESS" or run.employee.user_id != actor.id:
         raise PatrolPermissionError("Patrol is not active for this employee.")
-    route_checkpoint = run.route_version.route_checkpoints.filter(checkpoint=checkpoint).first()
+    if client_event_id and (
+        event := PatrolEvent.objects.filter(client_event_id=client_event_id)
+        .select_related("patrol_run")
+        .first()
+    ):
+        if event.event_type == "CHECKPOINT" and event.patrol_run_id == run.id:
+            visit = (
+                consistent_visits(CheckpointVisit.objects.all())
+                .filter(patrol_event=event, patrol_run=run)
+                .first()
+            )
+            if visit:
+                return visit
+        raise PatrolValidationError("Client event ID belongs to another Patrol operation.")
+    checkpoint = (
+        consistent_checkpoints(PatrolCheckpoint.objects.all())
+        .filter(pk=checkpoint.pk, company=run.company, site=run.site)
+        .first()
+    )
+    if checkpoint is None:
+        raise PatrolValidationError("Checkpoint does not belong to this Patrol run.")
+    route_checkpoint = (
+        consistent_route_checkpoints(run.route_version.route_checkpoints.all())
+        .filter(checkpoint=checkpoint)
+        .first()
+    )
     if not route_checkpoint:
         raise PatrolValidationError("Checkpoint is not part of the assigned route version.")
     policy = resolve_patrol_policy(
         company=run.company, branch=run.patrol_task.branch, site=run.site, at_datetime=event_time
     )
     token_result, credential = "NOT_REQUIRED", None
+    if nfc_payload:
+        raise PatrolValidationError("NFC verification is not available for this workflow.")
     if qr_token:
         credential = (
-            checkpoint.qr_credentials.filter(is_active=True).order_by("-generated_at").first()
+            consistent_qr_credentials(checkpoint.qr_credentials.filter(is_active=True))
+            .order_by("-generated_at")
+            .first()
         )
         token_result = (
             "VERIFIED"
@@ -293,7 +393,7 @@ def verify_patrol_checkpoint(
         gps_result = "FAILED"
     results = {gps_result, token_result} - {"NOT_REQUIRED"}
     overall = "FAILED" if "FAILED" in results else "VERIFIED" if results else "WARNING"
-    previous = run.checkpoint_visits.count()
+    previous = consistent_visits(run.checkpoint_visits.all()).count()
     order_warning = (
         run.route_version.order_mode == "STRICT" and route_checkpoint.sequence != previous + 1
     )
@@ -353,14 +453,13 @@ def verify_patrol_checkpoint(
 
 
 def _recalculate(run: PatrolRun) -> None:
-    run.visited_checkpoint_count = run.checkpoint_visits.values("checkpoint").distinct().count()
-    mandatory_ids = run.route_version.route_checkpoints.filter(is_mandatory=True).values_list(
-        "checkpoint_id", flat=True
-    )
+    visits = consistent_visits(run.checkpoint_visits.all())
+    run.visited_checkpoint_count = visits.values("checkpoint").distinct().count()
+    mandatory_ids = consistent_route_checkpoints(
+        run.route_version.route_checkpoints.filter(is_mandatory=True)
+    ).values_list("checkpoint_id", flat=True)
     run.verified_mandatory_count = (
-        run.checkpoint_visits.filter(
-            checkpoint_id__in=mandatory_ids, overall_verification_result="VERIFIED"
-        )
+        visits.filter(checkpoint_id__in=mandatory_ids, overall_verification_result="VERIFIED")
         .values("checkpoint")
         .distinct()
         .count()
@@ -387,14 +486,29 @@ def complete_patrol(
     *, actor: User, patrol_run: PatrolRun, event_time=None, gps=None, client_event_id=None
 ):
     run = (
-        PatrolRun.objects.select_for_update()
+        consistent_runs(PatrolRun.objects.select_for_update(of=("self",)))
         .select_related("employee__user", "patrol_task")
-        .get(pk=patrol_run.pk)
+        .filter(pk=patrol_run.pk)
+        .first()
     )
-    if run.status != "IN_PROGRESS":
-        raise PatrolValidationError("Patrol is not active.")
+    if run is None:
+        raise PatrolValidationError("Patrol run has an invalid tenant graph.")
     if run.employee.user_id != actor.id:
         raise PatrolPermissionError("Only the assigned employee may complete this patrol.")
+    if client_event_id and (
+        event := PatrolEvent.objects.filter(client_event_id=client_event_id)
+        .select_related("patrol_run")
+        .first()
+    ):
+        if (
+            event.event_type == "END"
+            and event.patrol_run_id == run.id
+            and event.employee_id == run.employee_id
+        ):
+            return run
+        raise PatrolValidationError("Client event ID belongs to another Patrol operation.")
+    if run.status != "IN_PROGRESS":
+        raise PatrolValidationError("Patrol is not active.")
     _recalculate(run)
     now = event_time or timezone.now()
     complete = run.verified_mandatory_count == run.mandatory_checkpoint_count
@@ -435,9 +549,13 @@ def complete_patrol(
 
 def mark_missed_patrols(*, at=None):
     now = at or timezone.now()
-    tasks = PatrolTask.objects.filter(status__in=["SCHEDULED", "READY"], scheduled_end_at__lt=now)
+    tasks = consistent_tasks(
+        PatrolTask.objects.filter(status__in=["SCHEDULED", "READY"], scheduled_end_at__lt=now)
+    )
     count = tasks.update(status="MISSED")
-    for task in PatrolTask.objects.filter(status="MISSED", scheduled_end_at__lt=now):
+    for task in consistent_tasks(
+        PatrolTask.objects.filter(status="MISSED", scheduled_end_at__lt=now)
+    ):
         PatrolException.objects.get_or_create(
             patrol_task=task,
             patrol_run=None,

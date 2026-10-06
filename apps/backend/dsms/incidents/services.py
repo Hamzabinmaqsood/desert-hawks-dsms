@@ -12,7 +12,8 @@ from dsms.audit.services import record_audit_event
 from dsms.deployment.models import DutyAssignment
 from dsms.identity import access
 from dsms.notifications.services import publish_notification_event
-from dsms.patrol.models import PatrolRun
+from dsms.patrol.models import PatrolException, PatrolObservation, PatrolRun
+from dsms.patrol.tenant_queries import consistent_exceptions, consistent_observations
 
 from .exceptions import IncidentPermissionError, IncidentValidationError
 from .models import (
@@ -511,6 +512,28 @@ def refer_supervision_finding_to_incident(*, finding, actor, reason):
 
 @transaction.atomic
 def refer_patrol_exception_to_incident(*, exception, actor, reason):
+    exception = (
+        consistent_exceptions(
+            PatrolException.objects.select_for_update(of=("self",)).select_related(
+                "company",
+                "patrol_task__branch",
+                "patrol_task__site",
+                "patrol_run",
+                "checkpoint_visit",
+            )
+        )
+        .filter(pk=exception.pk)
+        .first()
+    )
+    if exception is None:
+        raise IncidentValidationError("Patrol exception has an invalid tenant graph.")
+    if not access.has_permission(
+        user=actor,
+        permission="patrol.resolve_patrol_exception",
+        company=exception.company,
+        branch=exception.patrol_task.branch,
+    ):
+        raise IncidentPermissionError("Patrol exception referral permission is required.")
     existing = Incident.objects.filter(patrol_exception=exception).first()
     if existing:
         return existing
@@ -547,6 +570,28 @@ def refer_patrol_exception_to_incident(*, exception, actor, reason):
 
 @transaction.atomic
 def refer_patrol_observation_to_incident(*, observation, actor, reason):
+    observation = (
+        consistent_observations(
+            PatrolObservation.objects.select_for_update(of=("self",)).select_related(
+                "company",
+                "patrol_run__patrol_task__branch",
+                "site",
+                "post",
+                "checkpoint_visit",
+            )
+        )
+        .filter(pk=observation.pk)
+        .first()
+    )
+    if observation is None:
+        raise IncidentValidationError("Patrol observation has an invalid tenant graph.")
+    if not access.has_permission(
+        user=actor,
+        permission="patrol.change_patrolobservation",
+        company=observation.company,
+        branch=observation.patrol_run.patrol_task.branch,
+    ):
+        raise IncidentPermissionError("Patrol observation referral permission is required.")
     existing = Incident.objects.filter(patrol_observation=observation).first()
     if existing:
         return existing
