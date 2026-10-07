@@ -4,13 +4,15 @@ from django.utils import timezone
 
 from .models import Incident, IncidentException
 from .services import resolve_incident_escalation_policy
+from .tenant_queries import consistent_incidents
 
 
 @shared_task
 def reconcile_incident_slas():
     now = timezone.now()
     created = 0
-    for incident in Incident.objects.exclude(status__in=["CLOSED", "CANCELLED"]):
+    incidents = consistent_incidents(Incident.objects.exclude(status__in=["CLOSED", "CANCELLED"]))
+    for incident in incidents:
         policy = resolve_incident_escalation_policy(incident)
         if not policy:
             continue

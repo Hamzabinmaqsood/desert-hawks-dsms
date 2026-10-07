@@ -7,13 +7,22 @@ from django.db.models import Case, IntegerField, Value, When
 from django.utils import timezone
 
 from dsms.attendance.models import AttendanceRecord
+from dsms.attendance.tenant_queries import consistent_attendance_records
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
 from dsms.deployment.models import DutyAssignment
+from dsms.deployment.tenant_queries import (
+    consistent_duty_assignments,
+    consistent_employees,
+)
 from dsms.identity import access
 from dsms.notifications.services import publish_notification_event
 from dsms.patrol.models import PatrolException, PatrolObservation, PatrolRun
-from dsms.patrol.tenant_queries import consistent_exceptions, consistent_observations
+from dsms.patrol.tenant_queries import (
+    consistent_exceptions,
+    consistent_observations,
+    consistent_runs,
+)
 
 from .exceptions import IncidentPermissionError, IncidentValidationError
 from .models import (
@@ -26,6 +35,13 @@ from .models import (
     IncidentResponder,
     IncidentType,
     SOSAlert,
+)
+from .tenant_queries import (
+    consistent_escalation_policies,
+    consistent_incidents,
+    consistent_sos_alerts,
+    incident_graph_errors,
+    user_belongs_to_company,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,18 +89,72 @@ def _event(incident, kind, actor, title, *, previous="", new="", description="")
     return event
 
 
+def _require_permission(*, actor, permission, company, branch, operational_zone=None):
+    if not access.has_permission(
+        user=actor,
+        permission=permission,
+        company=company,
+        branch=branch,
+        operational_zone=operational_zone,
+    ):
+        raise IncidentPermissionError(f"{permission} permission is required in the target scope.")
+
+
+def _locked_incident(pk):
+    item = (
+        consistent_incidents(Incident.objects.select_for_update(of=("self",)))
+        .select_related("company", "branch", "operational_zone", "site", "incident_type")
+        .filter(pk=pk)
+        .first()
+    )
+    if item is None:
+        raise IncidentValidationError("Incident has an invalid tenant graph.")
+    return item
+
+
+def _locked_sos(pk):
+    item = (
+        consistent_sos_alerts(SOSAlert.objects.select_for_update(of=("self",)))
+        .select_related("company", "employee__branch", "linked_incident")
+        .filter(pk=pk)
+        .first()
+    )
+    if item is None:
+        raise IncidentValidationError("SOS has an invalid tenant graph.")
+    return item
+
+
 @transaction.atomic
 def create_incident(
-    *, actor, company, branch, incident_type, title, description, source="OTHER", **context
+    *,
+    actor,
+    company,
+    branch,
+    incident_type,
+    title,
+    description,
+    source="OTHER",
+    authorized_source=False,
+    **context,
 ):
-    if not incident_type.is_active:
-        raise IncidentValidationError("Inactive incident types cannot be used.")
-    if incident_type.company_id and incident_type.company_id != company.id:
-        raise IncidentValidationError("Incident type belongs to another company.")
-    for name in ("client", "site", "post", "reporter_employee"):
-        obj = context.get(name)
-        if obj is not None and getattr(obj, "company_id", company.id) != company.id:
-            raise IncidentValidationError(f"{name} belongs to another company.")
+    site = context.get("site")
+    if site is not None:
+        context.setdefault("client", site.client)
+        context.setdefault("contract", site.contract)
+    errors = incident_graph_errors(
+        company=company, branch=branch, incident_type=incident_type, context=context
+    )
+    if errors:
+        raise IncidentValidationError("; ".join(errors.values()))
+    if not authorized_source:
+        source = "OTHER"
+        _require_permission(
+            actor=actor,
+            permission="incidents.report_incident",
+            company=company,
+            branch=branch,
+            operational_zone=context.get("operational_zone"),
+        )
     incident = Incident.objects.create(
         incident_number=_number("INC"),
         company=company,
@@ -142,36 +212,83 @@ def trigger_sos(
 ):
     if not actor or not actor.is_authenticated:
         raise IncidentPermissionError("Authentication is required.")
-    if employee.user_id != actor.id and not access.has_permission(
+    employee = (
+        consistent_employees(
+            type(employee)
+            .objects.select_related("company", "branch", "user")
+            .filter(company__is_active=True)
+        )
+        .filter(pk=employee.pk)
+        .first()
+    )
+    if employee is None:
+        raise IncidentValidationError("Employee has an invalid tenant graph.")
+    is_self = employee.user_id == actor.id
+    self_allowed = is_self and access.has_permission(
+        user=actor,
+        permission="incidents.trigger_own_sos",
+        company=employee.company,
+        branch=employee.branch,
+    )
+    manager_allowed = access.has_permission(
         user=actor,
         permission="incidents.manage_incident",
         company=employee.company,
         branch=employee.branch,
-    ):
-        raise IncidentPermissionError("A self-service user may only trigger their own SOS.")
-    existing = (
+    )
+    if not self_allowed and not manager_allowed:
+        raise IncidentPermissionError("SOS trigger permission is required.")
+    raw_existing = (
         SOSAlert.objects.select_related("linked_incident")
         .filter(company=employee.company, client_event_id=client_event_id)
         .first()
     )
+    existing = (
+        consistent_sos_alerts(SOSAlert.objects.select_related("linked_incident"))
+        .filter(company=employee.company, client_event_id=client_event_id)
+        .first()
+    )
+    if raw_existing is not None and existing is None:
+        raise IncidentValidationError("The existing SOS idempotency record is inconsistent.")
     if existing:
+        if existing.employee_id != employee.id or existing.user_id != actor.id:
+            raise IncidentPermissionError(
+                "The SOS idempotency key belongs to another logical operation."
+            ) from None
         return existing
+    if location:
+        latitude = Decimal(str(location["latitude"]))
+        longitude = Decimal(str(location["longitude"]))
+        if not Decimal("-90") <= latitude <= Decimal("90"):
+            raise IncidentValidationError("Latitude is outside the valid range.")
+        if not Decimal("-180") <= longitude <= Decimal("180"):
+            raise IncidentValidationError("Longitude is outside the valid range.")
     now = timezone.now()
     duty = (
-        DutyAssignment.objects.filter(employee=employee, status__in=["PLANNED", "CONFIRMED"])
-        .select_related("duty_shift__site", "duty_shift__post", "duty_shift__branch")
+        consistent_duty_assignments(
+            DutyAssignment.objects.filter(
+                employee=employee, status__in=["PLANNED", "CONFIRMED"]
+            ).select_related(
+                "duty_shift__site__client",
+                "duty_shift__site__contract",
+                "duty_shift__post",
+                "duty_shift__branch",
+            )
+        )
         .order_by("-assigned_at")
         .first()
     )
     attendance = (
-        AttendanceRecord.objects.filter(duty_assignment=duty, actual_check_out_at__isnull=True)
+        consistent_attendance_records(
+            AttendanceRecord.objects.filter(duty_assignment=duty, actual_check_out_at__isnull=True)
+        )
         .order_by("-actual_check_in_at")
         .first()
         if duty
         else None
     )
     patrol = (
-        PatrolRun.objects.filter(employee=employee, status="IN_PROGRESS")
+        consistent_runs(PatrolRun.objects.filter(employee=employee, status="IN_PROGRESS"))
         .order_by("-started_at")
         .first()
     )
@@ -188,15 +305,20 @@ def trigger_sos(
             patrol_run=patrol,
             triggered_at=now,
             client_event_id=client_event_id,
-            latitude=Decimal(str(location["latitude"])) if location else None,
-            longitude=Decimal(str(location["longitude"])) if location else None,
+            latitude=latitude if location else None,
+            longitude=longitude if location else None,
             accuracy_meters=location.get("accuracy_meters") if location else None,
             message=message or "",
         )
     except IntegrityError:
-        return SOSAlert.objects.select_related("linked_incident").get(
+        existing = consistent_sos_alerts(SOSAlert.objects.select_related("linked_incident")).get(
             company=employee.company, client_event_id=client_event_id
         )
+        if existing.employee_id != employee.id or existing.user_id != actor.id:
+            raise IncidentPermissionError(
+                "The SOS idempotency key belongs to another logical operation."
+            ) from None
+        return existing
     create_incident_from_sos(sos=sos, actor=actor)
     sos.refresh_from_db()
     record_audit_event(
@@ -252,12 +374,33 @@ def _sos_type(company):
 @transaction.atomic
 def create_incident_from_sos(*, sos, actor):
     sos = (
-        SOSAlert.objects.select_for_update(of=("self",))
-        .select_related("employee", "company", "site", "duty_assignment")
-        .get(pk=sos.pk)
+        consistent_sos_alerts(SOSAlert.objects.select_for_update(of=("self",)))
+        .select_related(
+            "employee__branch",
+            "company",
+            "site__client",
+            "site__contract",
+            "duty_assignment__duty_shift__branch",
+        )
+        .filter(pk=sos.pk)
+        .first()
     )
+    if sos is None:
+        raise IncidentValidationError("SOS has an invalid tenant graph.")
+    if sos.employee.user_id != actor.id and not access.has_permission(
+        user=actor,
+        permission="incidents.manage_incident",
+        company=sos.company,
+        branch=sos.employee.branch,
+    ):
+        raise IncidentPermissionError("SOS management permission is required.")
     if sos.linked_incident_id:
-        return sos.linked_incident
+        linked = (
+            consistent_incidents(Incident.objects.all()).filter(pk=sos.linked_incident_id).first()
+        )
+        if linked is None:
+            raise IncidentValidationError("The linked Incident has an invalid tenant graph.")
+        return linked
     branch = (
         sos.duty_assignment.duty_shift.branch if sos.duty_assignment_id else sos.employee.branch
     )
@@ -275,6 +418,10 @@ def create_incident_from_sos(*, sos, actor):
         duty_assignment=sos.duty_assignment,
         attendance_record=sos.attendance_record,
         patrol_run=sos.patrol_run,
+        patrol_task=sos.patrol_run.patrol_task if sos.patrol_run_id else None,
+        client=sos.site.client if sos.site_id else None,
+        contract=sos.site.contract if sos.site_id else None,
+        authorized_source=True,
     )
     sos.linked_incident = incident
     sos.status = "LINKED_TO_INCIDENT"
@@ -302,7 +449,13 @@ def create_incident_from_sos(*, sos, actor):
 
 @transaction.atomic
 def acknowledge_sos(*, sos: SOSAlert, actor):
-    item = SOSAlert.objects.select_for_update().get(pk=sos.pk)
+    item = _locked_sos(sos.pk)
+    _require_permission(
+        actor=actor,
+        permission="incidents.acknowledge_incident",
+        company=item.company,
+        branch=item.employee.branch,
+    )
     if item.status not in {"TRIGGERED", "LINKED_TO_INCIDENT", "ACKNOWLEDGED"}:
         raise IncidentValidationError("SOS is not active.")
     if item.acknowledged_at is None:
@@ -310,7 +463,7 @@ def acknowledge_sos(*, sos: SOSAlert, actor):
     item.status = "ACKNOWLEDGED"
     item.save(update_fields=["acknowledged_by", "acknowledged_at", "status"])
     if item.linked_incident_id:
-        incident = Incident.objects.select_for_update().get(pk=item.linked_incident_id)
+        incident = _locked_incident(item.linked_incident_id)
         if incident.status == "NEW":
             transition_incident(incident=incident, actor=actor, new_status="ACKNOWLEDGED")
     record_audit_event(
@@ -342,11 +495,21 @@ def acknowledge_sos(*, sos: SOSAlert, actor):
 
 @transaction.atomic
 def resolve_sos(*, sos: SOSAlert, actor, reason: str):
-    item = SOSAlert.objects.select_for_update().get(pk=sos.pk)
+    item = _locked_sos(sos.pk)
+    _require_permission(
+        actor=actor,
+        permission="incidents.resolve_incident",
+        company=item.company,
+        branch=item.employee.branch,
+    )
     if item.status in {"CLOSED", "CANCELLED_BY_REPORTER", "FALSE_ALARM_CONFIRMED"}:
         raise IncidentValidationError("SOS is already terminal.")
     if item.linked_incident_id:
-        incident = Incident.objects.get(pk=item.linked_incident_id)
+        incident = (
+            consistent_incidents(Incident.objects.all()).filter(pk=item.linked_incident_id).first()
+        )
+        if incident is None:
+            raise IncidentValidationError("The linked Incident has an invalid tenant graph.")
         if incident.status not in {"RESOLVED", "CLOSED"}:
             raise IncidentValidationError("Resolve the linked incident before closing the SOS.")
     item.status = "CLOSED"
@@ -370,9 +533,27 @@ def resolve_sos(*, sos: SOSAlert, actor, reason: str):
 def assign_incident_responder(
     *, incident: Incident, actor, employee=None, user=None, responder_role="OTHER"
 ) -> IncidentResponder:
-    obj = Incident.objects.select_for_update().get(pk=incident.pk)
+    obj = _locked_incident(incident.pk)
+    _require_permission(
+        actor=actor,
+        permission="incidents.manage_responders",
+        company=obj.company,
+        branch=obj.branch,
+        operational_zone=obj.operational_zone,
+    )
     if obj.status in {"CLOSED", "CANCELLED"}:
         raise IncidentValidationError("A terminal incident cannot receive responders.")
+    if employee is None and user is None:
+        raise IncidentValidationError("A User or Employee responder is required.")
+    if (
+        employee is not None
+        and not consistent_employees(type(employee).objects.filter(company=obj.company))
+        .filter(pk=employee.pk)
+        .exists()
+    ):
+        raise IncidentValidationError("Responder Employee belongs to another Company.")
+    if user is not None and not user_belongs_to_company(user, obj.company):
+        raise IncidentValidationError("Responder User does not belong to the Incident Company.")
     responder = IncidentResponder.objects.create(
         incident=obj,
         employee=employee,
@@ -396,7 +577,23 @@ def add_incident_action(
     assigned_to_employee=None,
     priority="NORMAL",
 ):
-    obj = Incident.objects.select_for_update().get(pk=incident.pk)
+    obj = _locked_incident(incident.pk)
+    _require_permission(
+        actor=actor,
+        permission="incidents.manage_incident_actions",
+        company=obj.company,
+        branch=obj.branch,
+        operational_zone=obj.operational_zone,
+    )
+    if (
+        assigned_to_employee is not None
+        and not consistent_employees(type(assigned_to_employee).objects.filter(company=obj.company))
+        .filter(pk=assigned_to_employee.pk)
+        .exists()
+    ):
+        raise IncidentValidationError("Assigned Employee belongs to another Company.")
+    if assigned_to_user is not None and not user_belongs_to_company(assigned_to_user, obj.company):
+        raise IncidentValidationError("Assigned User does not belong to the Incident Company.")
     number = (
         obj.actions.order_by("-action_number").values_list("action_number", flat=True).first() or 0
     ) + 1
@@ -418,7 +615,14 @@ def add_incident_action(
 
 @transaction.atomic
 def escalate_incident(*, incident: Incident, actor, escalation_type="MANUAL", reason=""):
-    obj = Incident.objects.select_for_update().get(pk=incident.pk)
+    obj = _locked_incident(incident.pk)
+    _require_permission(
+        actor=actor,
+        permission="incidents.escalate_incident",
+        company=obj.company,
+        branch=obj.branch,
+        operational_zone=obj.operational_zone,
+    )
     escalation, _ = IncidentEscalation.objects.get_or_create(
         incident=obj,
         escalation_type=escalation_type,
@@ -477,8 +681,20 @@ def refer_supervision_finding_to_incident(*, finding, actor, reason):
     )
     if finding is None:
         raise IncidentValidationError("Supervision finding is not tenant-consistent.")
-    existing = Incident.objects.filter(supervision_finding=finding).first()
-    if existing:
+    if not access.has_permission(
+        user=actor,
+        permission="supervision.change_inspectionfinding",
+        company=finding.company,
+        branch=finding.site.managing_branch,
+    ):
+        raise IncidentPermissionError("Supervision finding referral permission is required.")
+    raw_existing = Incident.objects.filter(supervision_finding=finding).first()
+    existing = (
+        consistent_incidents(Incident.objects.all()).filter(supervision_finding=finding).first()
+    )
+    if raw_existing is not None and existing is None:
+        raise IncidentValidationError("The existing referral Incident is tenant-inconsistent.")
+    if existing is not None:
         return existing
     incident = create_incident(
         actor=actor,
@@ -495,6 +711,7 @@ def refer_supervision_finding_to_incident(*, finding, actor, reason):
         inspection=finding.inspection,
         site_visit=finding.inspection.site_visit,
         supervision_finding=finding,
+        authorized_source=True,
     )
     record_audit_event(
         action="SUPERVISION_FINDING_ESCALATED",
@@ -534,8 +751,13 @@ def refer_patrol_exception_to_incident(*, exception, actor, reason):
         branch=exception.patrol_task.branch,
     ):
         raise IncidentPermissionError("Patrol exception referral permission is required.")
-    existing = Incident.objects.filter(patrol_exception=exception).first()
-    if existing:
+    raw_existing = Incident.objects.filter(patrol_exception=exception).first()
+    existing = (
+        consistent_incidents(Incident.objects.all()).filter(patrol_exception=exception).first()
+    )
+    if raw_existing is not None and existing is None:
+        raise IncidentValidationError("The existing referral Incident is tenant-inconsistent.")
+    if existing is not None:
         return existing
     task = exception.patrol_task
     incident = create_incident(
@@ -553,6 +775,7 @@ def refer_patrol_exception_to_incident(*, exception, actor, reason):
         patrol_run=exception.patrol_run,
         checkpoint_visit=exception.checkpoint_visit,
         patrol_exception=exception,
+        authorized_source=True,
     )
     record_audit_event(
         action="PATROL_EXCEPTION_ESCALATED",
@@ -592,8 +815,13 @@ def refer_patrol_observation_to_incident(*, observation, actor, reason):
         branch=observation.patrol_run.patrol_task.branch,
     ):
         raise IncidentPermissionError("Patrol observation referral permission is required.")
-    existing = Incident.objects.filter(patrol_observation=observation).first()
-    if existing:
+    raw_existing = Incident.objects.filter(patrol_observation=observation).first()
+    existing = (
+        consistent_incidents(Incident.objects.all()).filter(patrol_observation=observation).first()
+    )
+    if raw_existing is not None and existing is None:
+        raise IncidentValidationError("The existing referral Incident is tenant-inconsistent.")
+    if existing is not None:
         return existing
     run = observation.patrol_run
     incident = create_incident(
@@ -612,15 +840,22 @@ def refer_patrol_observation_to_incident(*, observation, actor, reason):
         patrol_run=run,
         checkpoint_visit=observation.checkpoint_visit,
         patrol_observation=observation,
+        authorized_source=True,
     )
     return incident
 
 
 @transaction.atomic
 def cancel_own_sos(*, actor, sos, reason):
-    locked = SOSAlert.objects.select_for_update().get(pk=sos.pk)
+    locked = _locked_sos(sos.pk)
     if locked.employee.user_id != actor.id:
         raise IncidentPermissionError("Only the reporter may request cancellation.")
+    _require_permission(
+        actor=actor,
+        permission="incidents.trigger_own_sos",
+        company=locked.company,
+        branch=locked.employee.branch,
+    )
     if not reason.strip() or locked.status not in {"TRIGGERED", "LINKED_TO_INCIDENT"}:
         raise IncidentValidationError("A reason and an active SOS are required.")
     locked.status, locked.cancelled_at, locked.cancellation_reason = (
@@ -655,7 +890,25 @@ TRANSITIONS = {
 
 @transaction.atomic
 def transition_incident(*, incident, actor, new_status, summary=""):
-    obj = Incident.objects.select_for_update().get(pk=incident.pk)
+    obj = _locked_incident(incident.pk)
+    permission = {
+        "ACKNOWLEDGED": "incidents.acknowledge_incident",
+        "RESPONDING": "incidents.manage_incident_response",
+        "CONTAINED": "incidents.contain_incident",
+        "RESOLVED": "incidents.resolve_incident",
+        "CLOSED": "incidents.close_incident",
+        "REOPENED": "incidents.reopen_incident",
+        "TRIAGED": "incidents.triage_incident",
+        "CANCELLED": "incidents.manage_incident",
+        "UNDER_INVESTIGATION": "incidents.manage_incident",
+    }.get(new_status, "incidents.manage_incident")
+    _require_permission(
+        actor=actor,
+        permission=permission,
+        company=obj.company,
+        branch=obj.branch,
+        operational_zone=obj.operational_zone,
+    )
     if new_status not in TRANSITIONS.get(obj.status, set()):
         raise IncidentValidationError(f"Invalid transition from {obj.status} to {new_status}.")
     if new_status == "CLOSED":
@@ -725,10 +978,15 @@ def transition_incident(*, incident, actor, new_status, summary=""):
 
 
 def resolve_incident_escalation_policy(incident):
+    incident = consistent_incidents(Incident.objects.all()).filter(pk=incident.pk).first()
+    if incident is None:
+        return None
     today = timezone.localdate()
     return (
-        IncidentEscalationPolicy.objects.filter(
-            company=incident.company, is_active=True, effective_from__lte=today
+        consistent_escalation_policies(
+            IncidentEscalationPolicy.objects.filter(
+                company=incident.company, is_active=True, effective_from__lte=today
+            )
         )
         .filter(models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=today))
         .filter(models.Q(site=incident.site) | models.Q(site__isnull=True))
@@ -749,9 +1007,10 @@ def resolve_incident_escalation_policy(incident):
 
 
 def command_center_queue(queryset=None):
-    qs = queryset or Incident.objects.all()
+    qs = queryset if queryset is not None else Incident.objects.all()
     return (
-        qs.exclude(status__in=["CLOSED", "CANCELLED"])
+        consistent_incidents(qs)
+        .exclude(status__in=["CLOSED", "CANCELLED"])
         .select_related("company", "branch", "site", "incident_type", "command_center_owner")
         .annotate(
             queue_rank=Case(

@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from uuid import uuid4
 
 import pytest
+from django.contrib.auth.models import Permission
 from django.utils import timezone
 
 from dsms.attendance.models import AttendancePeriod, AttendancePolicy, AttendanceRecord
@@ -34,14 +35,29 @@ from dsms.deployment.services import (
     submit_roster,
 )
 from dsms.finance.payroll_models import PayrollPeriod
+from dsms.identity.enums import AccessScopeType
 from dsms.incidents.models import IncidentType
 from dsms.incidents.services import acknowledge_sos, resolve_sos, transition_incident, trigger_sos
 from dsms.workforce.enums import EmployeeType, EmploymentStatus
-from tests.factories.identity import UserFactory
+from tests.factories.identity import RoleFactory, UserFactory, UserRoleAssignmentFactory
 from tests.factories.organization import BranchFactory
 from tests.factories.workforce import EmployeeFactory
 
 pytestmark = pytest.mark.django_db
+
+
+def grant_incident_permissions(user, branch, *codenames):
+    role = RoleFactory.create()
+    role.permissions.set(
+        Permission.objects.filter(content_type__app_label="incidents", codename__in=codenames)
+    )
+    UserRoleAssignmentFactory.create(
+        user=user,
+        role=role,
+        scope_type=AccessScopeType.BRANCH,
+        company=branch.company,
+        branch=branch,
+    )
 
 
 def operational_context():
@@ -229,6 +245,15 @@ def test_flow_b_sos_acknowledgement_resolution_and_timeline() -> None:
         default_severity="CRITICAL",
         default_priority="EMERGENCY",
         is_active=True,
+    )
+    grant_incident_permissions(actor, branch, "trigger_own_sos")
+    grant_incident_permissions(
+        command_user,
+        branch,
+        "acknowledge_incident",
+        "manage_incident_response",
+        "contain_incident",
+        "resolve_incident",
     )
     request_id = uuid4()
     sos = trigger_sos(

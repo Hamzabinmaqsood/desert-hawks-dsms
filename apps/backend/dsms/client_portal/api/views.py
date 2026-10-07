@@ -20,6 +20,7 @@ from dsms.client_portal.models import (
 from dsms.client_portal.services import acknowledge_report, create_service_request
 from dsms.contracts.models import SecuritySite, ServiceContract
 from dsms.incidents.models import Incident
+from dsms.incidents.tenant_queries import consistent_incidents
 
 from .serializers import (
     ClientIncidentSerializer,
@@ -93,10 +94,15 @@ class IncidentsView(PortalBase):
 
     def get(self, request, client_uuid):
         member = self.membership(request, client_uuid)
-        qs = Incident.objects.filter(
-            client=member.client,
-            client_visibility__visibility_status__in=["CLIENT_SUMMARY", "CLIENT_DETAILED"],
-        ).select_related("client_visibility")
+        qs = consistent_incidents(
+            Incident.objects.filter(
+                client=member.client,
+                client_visibility__visibility_status__in=[
+                    "CLIENT_SUMMARY",
+                    "CLIENT_DETAILED",
+                ],
+            ).select_related("client_visibility")
+        )
         if member.access_mode == "SELECTED_SITES":
             qs = qs.filter(site_id__in=member.site_access.filter(is_active=True).values("site_id"))
         return Response(ClientIncidentSerializer(qs, many=True).data)
