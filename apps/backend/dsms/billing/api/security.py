@@ -8,7 +8,8 @@ from django.db import models
 from django.db.models import F, Q, QuerySet
 
 from dsms.contracts.api.security import COMPANY_PATHS as CONTRACT_PATHS
-from dsms.finance.models import Account, CostCenter
+from dsms.finance.models import Account, CostCenter, JournalEntry
+from dsms.finance.operations_models import BankAccount
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.organization.models import Company
@@ -22,8 +23,19 @@ COMPANY_PATHS: dict[type[models.Model], str] = {
     billing_models.TaxCode: "company_id",
     billing_models.ClientCollectionActivity: "company_id",
     billing_models.ClientInvoice: "company_id",
+    billing_models.ClientInvoiceLine: "invoice__company_id",
+    billing_models.ClientInvoiceDocument: "company_id",
+    billing_models.ClientReceipt: "company_id",
+    billing_models.ClientReceiptAllocation: "receipt__company_id",
+    billing_models.ClientAccountTransaction: "company_id",
+    billing_models.ClientCreditNote: "company_id",
+    billing_models.ClientCreditNoteLine: "credit_note__company_id",
+    billing_models.ClientDebitNote: "company_id",
+    billing_models.ClientDebitNoteLine: "debit_note__company_id",
     Account: "company_id",
+    BankAccount: "company_id",
     CostCenter: "company_id",
+    JournalEntry: "company_id",
     **CONTRACT_PATHS,
 }
 GLOBAL_REFERENCES = {billing_models.TaxCode}
@@ -71,6 +83,42 @@ def consistent_queryset(queryset: QuerySet[Any]) -> QuerySet[Any]:
         )
     if model is billing_models.ClientCollectionActivity:
         queryset = queryset.filter(Q(invoice__isnull=True) | Q(invoice__client_id=F("client_id")))
+    if model is billing_models.ClientInvoice:
+        queryset = queryset.filter(
+            Q(contract__isnull=True) | Q(contract__client_id=F("client_id")),
+            Q(source_billing_schedule__isnull=True)
+            | Q(source_billing_schedule__client_id=F("client_id")),
+        )
+    if model is billing_models.ClientInvoiceLine:
+        queryset = queryset.filter(
+            Q(contract_service__isnull=True)
+            | Q(contract_service__contract_id=F("invoice__contract_id")),
+            Q(site__isnull=True) | Q(site__contract_id=F("invoice__contract_id")),
+            Q(billing_rule__isnull=True)
+            | Q(billing_rule__billing_schedule__contract_id=F("invoice__contract_id")),
+        )
+    if model is billing_models.ClientReceiptAllocation:
+        queryset = queryset.filter(
+            invoice__client_id=F("receipt__client_id"),
+            invoice__currency=F("receipt__currency"),
+        )
+    if model is billing_models.ClientAccountTransaction:
+        queryset = queryset.filter(
+            Q(invoice__isnull=True) | Q(invoice__client_id=F("client_id")),
+            Q(receipt__isnull=True) | Q(receipt__client_id=F("client_id")),
+            Q(allocation__isnull=True) | Q(allocation__receipt__client_id=F("client_id")),
+            Q(allocation__isnull=True) | Q(allocation__invoice__client_id=F("client_id")),
+        )
+    if model is billing_models.ClientCreditNote:
+        queryset = queryset.filter(
+            invoice__client_id=F("client_id"),
+            invoice__currency=F("currency"),
+        )
+    if model is billing_models.ClientDebitNote:
+        queryset = queryset.filter(
+            Q(invoice__isnull=True) | Q(invoice__client_id=F("client_id")),
+            Q(invoice__isnull=True) | Q(invoice__currency=F("currency")),
+        )
     return queryset
 
 

@@ -1,11 +1,15 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,type-arg,misc"
+from typing import cast
+
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from dsms.identity.models import User
 from dsms.notifications.models import NotificationRecipient, UserNotificationPreference
 from dsms.notifications.services import acknowledge_notification, mark_notification_read
+from dsms.notifications.tenant_queries import consistent_recipients_for_user
 
 from .serializers import AcknowledgeSerializer, InAppNotificationSerializer, PreferenceSerializer
 
@@ -23,7 +27,9 @@ class NotificationViewSet(
         if getattr(self, "swagger_fake_view", False):
             return self.queryset
         return (
-            NotificationRecipient.objects.filter(user=self.request.user)
+            consistent_recipients_for_user(
+                NotificationRecipient.objects.all(), user=cast(User, self.request.user)
+            )
             .select_related("notification")
             .order_by("-created_at")
         )

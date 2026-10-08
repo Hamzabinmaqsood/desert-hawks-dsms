@@ -101,6 +101,8 @@ def update_document_type(
 ) -> DocumentType:
     if document_type.is_system and not actor.is_superuser:
         raise ProtectedSystemDocumentTypeError("System document types cannot be modified.")
+    if "company" in fields and fields["company"] != document_type.company:
+        raise DocumentValidationError({"company": ["Document type ownership cannot be changed."]})
     for name, value in fields.items():
         setattr(document_type, name, value)
     _save(document_type)
@@ -188,6 +190,7 @@ def add_employee_document_version(
     actor: User,
     notes: str = "",
 ) -> EmployeeDocumentVersion:
+    _validate_document(document)
     extension, mime_type, size = validate_upload(upload, original_filename)
     upload.seek(0)
     digest = hashlib.sha256()
@@ -331,6 +334,7 @@ def revoke_employee_document(
 def supersede_employee_document(
     *, document: EmployeeDocument, successor: EmployeeDocument, actor: User, reason: str = ""
 ) -> EmployeeDocument:
+    _validate_document(successor)
     if (
         successor.pk == document.pk
         or successor.employee_id != document.employee_id

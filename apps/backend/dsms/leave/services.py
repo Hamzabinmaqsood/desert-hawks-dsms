@@ -143,7 +143,11 @@ def create_leave_request(
     *, actor, employee, leave_type, starts_at, ends_at, reason, emergency_request=False
 ):
     if (
-        leave_type.status != "ACTIVE"
+        not employee.company.is_active
+        or employee.employment_status != "ACTIVE"
+        or not getattr(actor, "is_active", False)
+        or employee.user_id != actor.id
+        or leave_type.status != "ACTIVE"
         or employee.company_id != leave_type.company_id
         and leave_type.company_id
     ):

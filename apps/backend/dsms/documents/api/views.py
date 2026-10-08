@@ -15,14 +15,16 @@ from rest_framework.views import APIView
 
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
+from dsms.deployment.tenant_queries import consistent_employees
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.workforce.models import Employee
 
 from .. import selectors, services
 from ..exceptions import DocumentError, to_error_dict
-from ..models import EmployeeDocument, EmployeeDocumentVersion
+from ..models import DocumentType, EmployeeDocument, EmployeeDocumentVersion
 from ..permissions import HasDocumentPermission
+from ..tenant_queries import scoped_document_types
 from .filters import EmployeeDocumentFilter
 from .serializers import (
     ComplianceSummarySerializer,
@@ -58,8 +60,30 @@ class DocumentTypeViewSet(
     http_method_names = ["get", "post", "patch", "head", "options"]
     permission_classes = [HasDocumentPermission]
     required_permission = "documents.manage_document_types"
-    queryset = selectors.document_type_list()
+    queryset = DocumentType.objects.none()
     serializer_class = DocumentTypeReadSerializer
+
+    def get_queryset(self) -> QuerySet[DocumentType]:
+        return scoped_document_types(
+            selectors.document_type_list(),
+            user=cast(User, self.request.user),
+            permission=self.required_permission,
+        )
+
+    def _require_target_scope(self, request: Request, company: Any) -> None:
+        user = cast(User, request.user)
+        if company is None:
+            if not user.is_superuser:
+                raise PermissionDenied(
+                    "Only platform administrators may manage global document types."
+                )
+            return
+        if not access.has_permission(
+            user=user, permission=self.required_permission, company=company
+        ):
+            raise PermissionDenied(
+                "Document type management permission is required in this Company."
+            )
 
     def get_serializer_class(self) -> Any:
         return (
@@ -71,6 +95,7 @@ class DocumentTypeViewSet(
     def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        self._require_target_scope(request, serializer.validated_data.get("company"))
         item = call_service(
             services.create_document_type, actor=request.user, **serializer.validated_data
         )
@@ -78,8 +103,13 @@ class DocumentTypeViewSet(
 
     def partial_update(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         item = self.get_object()
+        self._require_target_scope(request, item.company)
         serializer = self.get_serializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        target_company = serializer.validated_data.get("company", item.company)
+        if target_company != item.company:
+            raise ValidationError({"company": ["Document type ownership cannot be changed."]})
+        self._require_target_scope(request, target_company)
         item = call_service(
             services.update_document_type,
             document_type=item,
@@ -90,11 +120,13 @@ class DocumentTypeViewSet(
 
     @action(detail=True, methods=["post"])
     def activate(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        item = self.get_object()
+        self._require_target_scope(request, item.company)
         return Response(
             DocumentTypeReadSerializer(
                 call_service(
                     services.activate_document_type,
-                    document_type=self.get_object(),
+                    document_type=item,
                     actor=request.user,
                 )
             ).data
@@ -102,11 +134,13 @@ class DocumentTypeViewSet(
 
     @action(detail=True, methods=["post"])
     def deactivate(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        item = self.get_object()
+        self._require_target_scope(request, item.company)
         return Response(
             DocumentTypeReadSerializer(
                 call_service(
                     services.deactivate_document_type,
-                    document_type=self.get_object(),
+                    document_type=item,
                     actor=request.user,
                 )
             ).data
@@ -349,7 +383,7 @@ class EmployeeDocumentsView(APIView):
         tags=["Document Compliance"], responses=EmployeeDocumentListSerializer(many=True)
     )
     def get(self, request: Request, employee_id: str) -> Response:
-        employee = get_object_or_404(Employee, pk=employee_id)
+        employee = get_object_or_404(consistent_employees(Employee.objects.all()), pk=employee_id)
         self._require_employee_scope(request, employee)
         queryset = selectors.accessible_documents(cast(User, request.user)).filter(
             employee=employee
@@ -371,7 +405,7 @@ class EmployeeDocumentsView(APIView):
 class ComplianceSummaryView(EmployeeDocumentsView):
     @extend_schema(tags=["Document Compliance"], responses=ComplianceSummarySerializer)
     def get(self, request: Request, employee_id: str) -> Response:
-        employee = get_object_or_404(Employee, pk=employee_id)
+        employee = get_object_or_404(consistent_employees(Employee.objects.all()), pk=employee_id)
         self._require_employee_scope(request, employee)
         queryset = selectors.accessible_documents(cast(User, request.user)).filter(
             employee=employee

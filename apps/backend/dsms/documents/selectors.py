@@ -10,10 +10,11 @@ from dsms.identity.models import User
 
 from .enums import DocumentStatus
 from .models import DocumentType, EmployeeDocument, EmployeeDocumentEvent, EmployeeDocumentVersion
+from .tenant_queries import consistent_document_types, consistent_employee_documents
 
 
 def document_type_list() -> QuerySet[DocumentType]:
-    return DocumentType.objects.select_related("company")
+    return consistent_document_types(DocumentType.objects.select_related("company"))
 
 
 def active_document_types() -> QuerySet[DocumentType]:
@@ -22,16 +23,18 @@ def active_document_types() -> QuerySet[DocumentType]:
 
 def employee_document_list() -> QuerySet[EmployeeDocument]:
     current = EmployeeDocumentVersion.objects.filter(is_current=True)
-    return EmployeeDocument.objects.select_related(
-        "employee",
-        "company",
-        "employee__branch",
-        "employee__branch__region",
-        "employee__department",
-        "employee__designation",
-        "document_type",
-        "verified_by",
-    ).prefetch_related(Prefetch("versions", queryset=current, to_attr="current_versions"))
+    return consistent_employee_documents(
+        EmployeeDocument.objects.select_related(
+            "employee",
+            "company",
+            "employee__branch",
+            "employee__branch__region",
+            "employee__department",
+            "employee__designation",
+            "document_type",
+            "verified_by",
+        ).prefetch_related(Prefetch("versions", queryset=current, to_attr="current_versions"))
+    )
 
 
 def accessible_documents(
@@ -94,13 +97,13 @@ def rejected_documents() -> QuerySet[EmployeeDocument]:
 def expired_documents(
     queryset: QuerySet[EmployeeDocument] | None = None,
 ) -> QuerySet[EmployeeDocument]:
-    return (queryset or employee_document_list()).filter(expires_on__lt=timezone.localdate())
+    source = queryset if queryset is not None else employee_document_list()
+    return source.filter(expires_on__lt=timezone.localdate())
 
 
 def expiring_documents(
     days: int = 30, queryset: QuerySet[EmployeeDocument] | None = None
 ) -> QuerySet[EmployeeDocument]:
     today = timezone.localdate()
-    return (queryset or employee_document_list()).filter(
-        expires_on__gte=today, expires_on__lte=today + timedelta(days=days)
-    )
+    source = queryset if queryset is not None else employee_document_list()
+    return source.filter(expires_on__gte=today, expires_on__lte=today + timedelta(days=days))

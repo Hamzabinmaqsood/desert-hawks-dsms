@@ -1,10 +1,12 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,type-arg"
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from dsms.deployment.tenant_queries import consistent_employees, consistent_leave_requests
 from dsms.leave.models import LeaveRequest, LeaveType
 from dsms.leave.services import (
     create_leave_request,
@@ -17,13 +19,21 @@ from .serializers import AvailabilitySerializer, LeaveRequestSerializer, LeaveTy
 
 
 def own_employee(user):
-    return get_object_or_404(Employee, user=user)
+    return get_object_or_404(consistent_employees(Employee.objects.all()), user=user)
 
 
 class LeaveTypeViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = LeaveTypeSerializer
-    queryset = LeaveType.objects.filter(status="ACTIVE")
+    queryset = LeaveType.objects.none()
+
+    def get_queryset(self):
+        employee = own_employee(self.request.user)
+        return (
+            LeaveType.objects.filter(status="ACTIVE")
+            .filter(Q(company__isnull=True) | Q(company=employee.company))
+            .order_by("sort_order", "code", "pk")
+        )
 
 
 class MyLeaveRequestViewSet(
@@ -41,14 +51,16 @@ class MyLeaveRequestViewSet(
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return self.queryset
-        return LeaveRequest.objects.filter(employee=own_employee(self.request.user)).select_related(
-            "leave_type", "policy"
-        )
+        return consistent_leave_requests(
+            LeaveRequest.objects.filter(employee=own_employee(self.request.user))
+        ).select_related("leave_type", "policy")
 
     def create(self, request, *args, **kwargs):
         employee = own_employee(request.user)
         leave_type = get_object_or_404(
-            LeaveType, pk=request.data.get("leave_type"), status="ACTIVE"
+            LeaveType.objects.filter(Q(company__isnull=True) | Q(company=employee.company)),
+            pk=request.data.get("leave_type"),
+            status="ACTIVE",
         )
         payload = LeaveRequestSerializer(data=request.data)
         payload.is_valid(raise_exception=True)

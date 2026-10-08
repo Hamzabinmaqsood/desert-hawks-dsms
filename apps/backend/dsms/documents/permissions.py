@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 from dsms.identity import access
 from dsms.identity.models import User
 
-from .models import EmployeeDocument
+from .models import DocumentType, EmployeeDocument
 
 
 class HasDocumentPermission(BasePermission):
@@ -27,6 +27,14 @@ class HasDocumentPermission(BasePermission):
         user = cast(User, request.user)
         if user.is_superuser:
             return True
+        if isinstance(obj, DocumentType):
+            if obj.company_id is None:
+                return False
+            return access.has_permission(
+                user=user,
+                permission=getattr(view, "required_permission", "documents.manage_document_types"),
+                company=obj.company,
+            )
         document = cast(EmployeeDocument, obj)
         permission = getattr(view, "action_permissions", {}).get(
             getattr(view, "action", ""), "documents.view_employeedocument"

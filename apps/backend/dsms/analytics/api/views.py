@@ -27,7 +27,7 @@ def _company_for(request: Any) -> Company:
         )
     }:
         raise Http404
-    return Company.objects.get(pk=company_id)
+    return Company.objects.get(pk=company_id, is_active=True)
 
 
 class MetricCatalogViewSet(viewsets.ReadOnlyModelViewSet[AnalyticsMetricDefinition]):
@@ -82,17 +82,22 @@ class ExecutiveViewSet(viewsets.ViewSet):
         cached = cache.get(cache_key)
         if cached is not None:
             return response.Response(cached)
-        dashboard = (
-            DashboardDefinition.objects.filter(
-                company__in=[company, None], code=dashboard_code, is_active=True
-            )
-            .prefetch_related("widgets__kpi__metric_definition")
-            .first()
-        )
+        dashboard = DashboardDefinition.objects.filter(
+            company=company, code=dashboard_code, is_active=True
+        ).first()
+        if dashboard is None:
+            dashboard = DashboardDefinition.objects.filter(
+                company__isnull=True, code=dashboard_code, is_active=True
+            ).first()
         if dashboard is None:
             return response.Response({"sections": {}, "warnings": ["Dashboard is not configured."]})
         sections: dict[str, list[dict[str, Any]]] = {}
-        for widget in dashboard.widgets.all():
+        widgets = dashboard.widgets.filter(
+            models.Q(kpi__company=company) | models.Q(kpi__company__isnull=True),
+            kpi__is_active=True,
+            kpi__metric_definition__is_active=True,
+        ).select_related("kpi__metric_definition")
+        for widget in widgets:
             definition = widget.kpi.metric_definition
             result = calculate_metric(
                 metric_definition=definition, period_start=start, period_end=today, company=company
@@ -143,8 +148,26 @@ class DataQualityViewSet(viewsets.ReadOnlyModelViewSet[AnalyticsDataQualityIssue
         company_ids = access.get_accessible_company_ids(
             cast(User, self.request.user), permission="analytics.view_data_quality"
         )
-        return AnalyticsDataQualityIssue.objects.filter(company_id__in=company_ids).select_related(
-            "metric_definition", "branch", "client", "site"
+        return (
+            AnalyticsDataQualityIssue.objects.filter(
+                company_id__in=company_ids, company__is_active=True
+            )
+            .filter(
+                models.Q(branch__isnull=True) | models.Q(branch__company_id=models.F("company_id")),
+                models.Q(client__isnull=True) | models.Q(client__company_id=models.F("company_id")),
+                models.Q(site__isnull=True) | models.Q(site__company_id=models.F("company_id")),
+                models.Q(site__isnull=True)
+                | models.Q(site__managing_branch__company_id=models.F("company_id")),
+                models.Q(site__isnull=True)
+                | models.Q(client__isnull=True)
+                | models.Q(site__client_id=models.F("client_id")),
+                models.Q(site__isnull=True)
+                | models.Q(branch__isnull=True)
+                | models.Q(site__managing_branch_id=models.F("branch_id")),
+            )
+            .select_related("metric_definition", "branch", "client", "site")
+            .distinct()
+            .order_by("pk")
         )
 
     @decorators.action(detail=False, methods=["get"])

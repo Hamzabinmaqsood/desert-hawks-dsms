@@ -5,17 +5,23 @@ from typing import Any
 from django.db.models import QuerySet, Sum
 from django.utils import timezone
 
+from .api.security import consistent_queryset
 from .enums import InvoiceStatus
-from .models import ClientAccountTransaction, ClientInvoice, ClientReceipt
+from .models import (
+    ClientAccountTransaction,
+    ClientInvoice,
+    ClientReceipt,
+    ClientReceiptAllocation,
+)
 
 ZERO = Decimal("0.00")
 
 
 def get_client_account_balance(client: Any, as_of_date: date | None = None) -> dict[str, Decimal]:
-    invoices = ClientInvoice.objects.filter(client=client).exclude(
+    invoices = consistent_queryset(ClientInvoice.objects.filter(client=client)).exclude(
         status__in=[InvoiceStatus.VOIDED, InvoiceStatus.CANCELLED]
     )
-    receipts = ClientReceipt.objects.filter(client=client).exclude(
+    receipts = consistent_queryset(ClientReceipt.objects.filter(client=client)).exclude(
         status__in=["REVERSED", "CANCELLED"]
     )
     if as_of_date:
@@ -24,7 +30,12 @@ def get_client_account_balance(client: Any, as_of_date: date | None = None) -> d
     invoiced = invoices.aggregate(total=Sum("total_amount"))["total"] or ZERO
     payments = invoices.aggregate(total=Sum("amount_paid"))["total"] or ZERO
     receipt_total = receipts.aggregate(total=Sum("amount"))["total"] or ZERO
-    allocated = receipts.aggregate(total=Sum("allocations__amount"))["total"] or ZERO
+    allocated = (
+        consistent_queryset(ClientReceiptAllocation.objects.filter(receipt__in=receipts)).aggregate(
+            total=Sum("amount")
+        )["total"]
+        or ZERO
+    )
     return {
         "invoiced": invoiced,
         "credit_notes": ZERO,
@@ -47,7 +58,7 @@ def get_accounts_receivable_ageing(
         "91-120": ZERO,
         "120+": ZERO,
     }
-    invoices = ClientInvoice.objects.filter(company=company, balance_due__gt=0)
+    invoices = consistent_queryset(ClientInvoice.objects.filter(company=company, balance_due__gt=0))
     if client is not None:
         invoices = invoices.filter(client=client)
     rows = invoices.exclude(status__in=[InvoiceStatus.VOIDED, InvoiceStatus.CANCELLED]).values(
@@ -74,7 +85,7 @@ def get_accounts_receivable_ageing(
 
 def client_statement(*, client: Any) -> QuerySet[ClientAccountTransaction]:
     return (
-        ClientAccountTransaction.objects.filter(client=client)
+        consistent_queryset(ClientAccountTransaction.objects.filter(client=client))
         .select_related("invoice", "receipt", "created_by")
         .order_by("effective_at", "created_at")
     )

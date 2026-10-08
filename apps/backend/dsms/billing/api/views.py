@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Prefetch
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -28,10 +29,14 @@ from ..models import (
     ClientBillingProfile,
     ClientCollectionActivity,
     ClientCreditNote,
+    ClientCreditNoteLine,
     ClientDebitNote,
+    ClientDebitNoteLine,
     ClientInvoice,
+    ClientInvoiceDocument,
     ClientInvoiceLine,
     ClientReceipt,
+    ClientReceiptAllocation,
     TaxCode,
 )
 from ..selectors import get_accounts_receivable_ageing, get_client_account_balance
@@ -236,9 +241,18 @@ class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
         }.get(self.action, "billing.view_clientinvoice")
 
     def get_queryset(self) -> Any:
-        queryset = ClientInvoice.objects.select_related(
-            "company", "client", "contract"
-        ).prefetch_related("lines", "allocations__receipt")
+        lines = security.consistent_queryset(ClientInvoiceLine.objects.all())
+        allocations = security.consistent_queryset(
+            ClientReceiptAllocation.objects.select_related("receipt", "invoice")
+        )
+        documents = security.consistent_queryset(ClientInvoiceDocument.objects.all())
+        queryset = security.consistent_queryset(
+            ClientInvoice.objects.select_related("company", "client", "contract")
+        ).prefetch_related(
+            Prefetch("lines", queryset=lines),
+            Prefetch("allocations", queryset=allocations),
+            Prefetch("documents", queryset=documents),
+        )
         ids = access.get_fully_accessible_company_ids(
             cast(User, self.request.user), permission=self._permission()
         )
@@ -301,7 +315,10 @@ class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
     )
     def line_detail(self, request: Any, pk: Any = None, line_id: Any = None) -> response.Response:
         invoice = self.get_object()
-        line = get_object_or_404(ClientInvoiceLine.objects.filter(invoice=invoice), pk=line_id)
+        line = get_object_or_404(
+            security.consistent_queryset(ClientInvoiceLine.objects.filter(invoice=invoice)),
+            pk=line_id,
+        )
         try:
             if request.method == "DELETE":
                 delete_invoice_line(invoice=invoice, line=line, actor=request.user)
@@ -339,7 +356,9 @@ class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
 
     @decorators.action(detail=True, methods=["get"])
     def download(self, request: Any, pk: Any = None) -> FileResponse:
-        document = self.get_object().documents.order_by("-revision_number").first()
+        document = security.consistent_queryset(
+            self.get_object().documents.order_by("-revision_number")
+        ).first()
         if not document:
             raise Http404
         return FileResponse(
@@ -440,9 +459,12 @@ class ReceiptViewSet(NoDeleteViewSet):
         )
 
     def get_queryset(self) -> Any:
-        queryset = ClientReceipt.objects.select_related(
-            "company", "client", "received_by"
-        ).prefetch_related("allocations__invoice")
+        allocations = security.consistent_queryset(
+            ClientReceiptAllocation.objects.select_related("invoice", "receipt")
+        )
+        queryset = security.consistent_queryset(
+            ClientReceipt.objects.select_related("company", "client", "received_by")
+        ).prefetch_related(Prefetch("allocations", queryset=allocations))
         ids = access.get_fully_accessible_company_ids(
             cast(User, self.request.user), permission=self._permission()
         )
@@ -473,7 +495,9 @@ class ReceiptViewSet(NoDeleteViewSet):
     def allocate(self, request: Any, pk: Any = None) -> response.Response:
         receipt = self.get_object()
         invoice = get_object_or_404(
-            ClientInvoice.objects.filter(company=receipt.company, client=receipt.client),
+            security.consistent_queryset(
+                ClientInvoice.objects.filter(company=receipt.company, client=receipt.client)
+            ),
             pk=request.data.get("invoice"),
         )
         try:
@@ -501,12 +525,14 @@ class ReceiptViewSet(NoDeleteViewSet):
     @decorators.action(detail=True, methods=["get"], url_path="eligible-invoices")
     def eligible_invoices(self, request: Any, pk: Any = None) -> response.Response:
         receipt = self.get_object()
-        invoices = ClientInvoice.objects.filter(
-            company=receipt.company,
-            client=receipt.client,
-            currency=receipt.currency,
-            status__in=["ISSUED", "PARTIALLY_PAID"],
-            balance_due__gt=0,
+        invoices = security.consistent_queryset(
+            ClientInvoice.objects.filter(
+                company=receipt.company,
+                client=receipt.client,
+                currency=receipt.currency,
+                status__in=["ISSUED", "PARTIALLY_PAID"],
+                balance_due__gt=0,
+            )
         ).order_by("due_date", "invoice_number")
         return response.Response(
             [
@@ -576,9 +602,7 @@ class DashboardViewSet(viewsets.ViewSet):
 
 
 class CreditNoteViewSet(viewsets.ReadOnlyModelViewSet[ClientCreditNote]):
-    queryset = ClientCreditNote.objects.select_related(
-        "company", "client", "invoice"
-    ).prefetch_related("lines")
+    queryset = ClientCreditNote.objects.select_related("company", "client", "invoice")
     serializer_class = CreditNoteSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
     custom_action_permissions = {
@@ -590,7 +614,14 @@ class CreditNoteViewSet(viewsets.ReadOnlyModelViewSet[ClientCreditNote]):
         ids = access.get_fully_accessible_company_ids(
             cast(User, self.request.user), permission="billing.view_clientcreditnote"
         )
-        return self.queryset.filter(company_id__in=ids)
+        lines = security.consistent_queryset(
+            ClientCreditNoteLine.objects.select_related("revenue_account", "tax_account")
+        )
+        return (
+            security.consistent_queryset(self.queryset.filter(company_id__in=ids))
+            .prefetch_related(Prefetch("lines", queryset=lines))
+            .order_by("-created_at")
+        )
 
     @decorators.action(detail=True, methods=["post"])
     def approve(self, request: Any, pk: Any = None) -> response.Response:
@@ -608,9 +639,7 @@ class CreditNoteViewSet(viewsets.ReadOnlyModelViewSet[ClientCreditNote]):
 
 
 class DebitNoteViewSet(viewsets.ReadOnlyModelViewSet[ClientDebitNote]):
-    queryset = ClientDebitNote.objects.select_related(
-        "company", "client", "invoice"
-    ).prefetch_related("lines")
+    queryset = ClientDebitNote.objects.select_related("company", "client", "invoice")
     serializer_class = DebitNoteSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
     custom_action_permissions = {
@@ -622,7 +651,14 @@ class DebitNoteViewSet(viewsets.ReadOnlyModelViewSet[ClientDebitNote]):
         ids = access.get_fully_accessible_company_ids(
             cast(User, self.request.user), permission="billing.view_clientdebitnote"
         )
-        return self.queryset.filter(company_id__in=ids)
+        lines = security.consistent_queryset(
+            ClientDebitNoteLine.objects.select_related("revenue_account", "tax_account")
+        )
+        return (
+            security.consistent_queryset(self.queryset.filter(company_id__in=ids))
+            .prefetch_related(Prefetch("lines", queryset=lines))
+            .order_by("-created_at")
+        )
 
     @decorators.action(detail=True, methods=["post"])
     def approve(self, request: Any, pk: Any = None) -> response.Response:

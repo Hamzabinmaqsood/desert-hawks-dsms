@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, QuerySet
 from django.utils import timezone
 
 from dsms.identity.models import User
@@ -23,6 +23,11 @@ from .models import (
     UserNotificationPreference,
 )
 from .providers import DisabledProvider
+from .tenant_queries import (
+    consistent_notifications,
+    consistent_recipients_for_user,
+    user_belongs_to_company,
+)
 
 MANDATORY_OPERATIONAL_EVENTS = {
     "SOS_TRIGGERED",
@@ -89,7 +94,7 @@ def publish_notification_event(
     safe_payload: Mapping[str, Any] | None = None,
 ) -> NotificationEvent:
     payload = validate_safe_payload(safe_payload or {})
-    event, _ = NotificationEvent.objects.get_or_create(
+    event, created = NotificationEvent.objects.get_or_create(
         event_key=event_key,
         defaults={
             "event_type": event_type,
@@ -101,6 +106,15 @@ def publish_notification_event(
             "safe_payload": payload,
         },
     )
+    if not created and (
+        event.event_type != event_type
+        or event.source_app != source_app
+        or event.source_model != source_model
+        or str(event.source_object_id or "") != str(source_object_id or "")
+        or event.company_id != getattr(company, "id", None)
+        or event.safe_payload != payload
+    ):
+        raise ValueError("Notification event key is already bound to another operation.")
     return event
 
 
@@ -125,14 +139,28 @@ def resolve_notification_recipients(*, event, rule):
             user_ids.update(
                 User.objects.filter(assignments, is_active=True).values_list("id", flat=True)
             )
-    return User.objects.filter(id__in=user_ids, is_active=True)
+    users = User.objects.filter(id__in=user_ids, is_active=True)
+    if event.company_id:
+        eligible_user_ids = [
+            user.id for user in users if user_belongs_to_company(user, event.company)
+        ]
+        return User.objects.filter(id__in=eligible_user_ids)
+    return users
 
 
 @transaction.atomic
 def process_notification_event(*, event_id: uuid.UUID | str) -> list[Notification]:
     event = NotificationEvent.objects.select_for_update().get(pk=event_id)
+    if event.company_id and event.company is not None and not event.company.is_active:
+        event.status, event.processed_at, event.last_error_code = (
+            "IGNORED",
+            timezone.now(),
+            "INACTIVE_COMPANY",
+        )
+        event.save(update_fields=["status", "processed_at", "last_error_code", "updated_at"])
+        return []
     if event.status == "PROCESSED":
-        return list(event.notifications.all())
+        return list(consistent_notifications(event.notifications.all()))
     event.processing_attempts += 1
     rules = (
         NotificationRule.objects.filter(event_type=event.event_type, is_active=True)
@@ -180,6 +208,8 @@ def process_notification_event(*, event_id: uuid.UUID | str) -> list[Notificatio
                 else None,
             },
         )
+        if not consistent_notifications(Notification.objects.filter(pk=notification.pk)).exists():
+            raise ValueError("Notification tenant graph is inconsistent.")
         recipients = resolve_notification_recipients(event=event, rule=rule)
         if event.event_type not in MANDATORY_OPERATIONAL_EVENTS:
             disabled_user_ids = (
@@ -217,8 +247,16 @@ def process_notification_event(*, event_id: uuid.UUID | str) -> list[Notificatio
 
 
 @transaction.atomic
-def deliver_external(*, recipient, channel, destination, provider=None):
-    recipient = NotificationRecipient.objects.select_for_update().get(pk=recipient.pk)
+def deliver_external(
+    *,
+    recipient: NotificationRecipient,
+    channel: str,
+    destination: str,
+    provider: Any = None,
+) -> NotificationDeliveryAttempt:
+    recipient = consistent_recipients_for_user(
+        NotificationRecipient.objects.select_for_update(of=("self",)), user=recipient.user
+    ).get(pk=recipient.pk)
     attempt_number = recipient.delivery_attempts.filter(channel=channel).count() + 1
     result = (provider or DisabledProvider()).send(
         destination=destination,
@@ -251,17 +289,21 @@ def deliver_external(*, recipient, channel, destination, provider=None):
     )
 
 
-def list_in_app_notifications(user):
+def list_in_app_notifications(user: User) -> QuerySet[NotificationRecipient]:
     return (
-        NotificationRecipient.objects.filter(user=user)
+        consistent_recipients_for_user(NotificationRecipient.objects.all(), user=user)
         .select_related("notification")
         .order_by("-notification__created_at")
     )
 
 
 @transaction.atomic
-def mark_notification_read(*, recipient, actor):
-    obj = NotificationRecipient.objects.select_for_update().get(pk=recipient.pk, user=actor)
+def mark_notification_read(
+    *, recipient: NotificationRecipient, actor: User
+) -> NotificationRecipient:
+    obj = consistent_recipients_for_user(
+        NotificationRecipient.objects.select_for_update(of=("self",)), user=actor
+    ).get(pk=recipient.pk)
     if obj.read_at is None:
         obj.read_at, obj.status = timezone.now(), "READ"
         obj.save()
@@ -269,8 +311,12 @@ def mark_notification_read(*, recipient, actor):
 
 
 @transaction.atomic
-def acknowledge_notification(*, recipient, actor, comment=""):
-    obj = NotificationRecipient.objects.select_for_update().get(pk=recipient.pk, user=actor)
+def acknowledge_notification(
+    *, recipient: NotificationRecipient, actor: User, comment: str = ""
+) -> NotificationRecipient:
+    obj = consistent_recipients_for_user(
+        NotificationRecipient.objects.select_for_update(of=("self",)), user=actor
+    ).get(pk=recipient.pk)
     if obj.acknowledged_at is None:
         obj.acknowledged_at, obj.acknowledgement_comment, obj.status = (
             timezone.now(),

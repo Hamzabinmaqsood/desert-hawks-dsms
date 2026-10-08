@@ -11,15 +11,19 @@ from ..enums import DocumentCategory
 from ..models import DocumentType, EmployeeDocument, EmployeeDocumentEvent, EmployeeDocumentVersion
 
 
-def _can_view_sensitive(context: dict[str, Any]) -> bool:
+def _can_view_sensitive(context: dict[str, Any], document: EmployeeDocument) -> bool:
     request: Request | None = context.get("request")
     user = getattr(request, "user", None)
     return bool(
         user
         and user.is_authenticated
-        and (
-            user.is_superuser
-            or "documents.view_sensitive_document_data" in access.get_effective_permissions(user)
+        and access.has_permission(
+            user=user,
+            permission="documents.view_sensitive_document_data",
+            company=document.company,
+            region=document.employee.branch.region if document.employee.branch else None,
+            branch=document.employee.branch,
+            department=document.employee.department,
         )
     )
 
@@ -111,12 +115,12 @@ class EmployeeDocumentDetailSerializer(EmployeeDocumentListSerializer):
         ]
 
     def get_document_number(self, obj: EmployeeDocument) -> str | None:
-        if not obj.document_type.is_sensitive or _can_view_sensitive(self.context):
+        if not obj.document_type.is_sensitive or _can_view_sensitive(self.context, obj):
             return obj.document_number
         return None
 
     def get_notes(self, obj: EmployeeDocument) -> str | None:
-        return obj.notes if _can_view_sensitive(self.context) else None
+        return obj.notes if _can_view_sensitive(self.context, obj) else None
 
 
 class DocumentVersionSerializer(serializers.ModelSerializer[EmployeeDocumentVersion]):
@@ -130,7 +134,6 @@ class DocumentVersionSerializer(serializers.ModelSerializer[EmployeeDocumentVers
             "file_extension",
             "file_size",
             "mime_type",
-            "sha256_hash",
             "uploaded_by",
             "uploaded_at",
             "notes",

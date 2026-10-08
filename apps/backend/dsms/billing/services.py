@@ -2,7 +2,7 @@ import hashlib
 from datetime import date, timedelta
 from decimal import Decimal
 from io import BytesIO
-from typing import Any
+from typing import Any, cast
 
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
@@ -23,6 +23,7 @@ from dsms.finance.services import (
     submit_journal,
 )
 
+from .api.security import consistent_queryset
 from .enums import (
     AdjustmentStatus,
     ARTransactionType,
@@ -47,6 +48,25 @@ from .models import (
 )
 
 ZERO = Decimal("0.00")
+
+
+def _validate_adjustment_line_relationships(company_id: Any, payload: dict[str, Any]) -> None:
+    if payload["revenue_account"].company_id != company_id:
+        raise ValidationError({"revenue_account": "Account belongs to another company."})
+    tax_account = payload.get("tax_account")
+    if tax_account and tax_account.company_id != company_id:
+        raise ValidationError({"tax_account": "Account belongs to another company."})
+
+
+def _consistent_adjustment_lines(note: Any) -> list[Any]:
+    safe = list(
+        consistent_queryset(note.lines.select_related("revenue_account", "tax_account")).order_by(
+            "line_number"
+        )
+    )
+    if len(safe) != note.lines.count():
+        raise ValidationError("Adjustment note contains inconsistent tenant relations.")
+    return safe
 
 
 def _maker_checker(maker_id: Any, actor: Any) -> None:
@@ -700,7 +720,9 @@ def allocate_receipt(
 def create_credit_note(
     *, invoice: ClientInvoice, actor: Any, reason: str, lines: list[dict[str, Any]]
 ) -> ClientCreditNote:
-    source = ClientInvoice.objects.select_for_update(of=("self",)).get(pk=invoice.pk)
+    source = consistent_queryset(ClientInvoice.objects.select_for_update(of=("self",))).get(
+        pk=invoice.pk
+    )
     if source.status not in {
         InvoiceStatus.ISSUED,
         InvoiceStatus.PARTIALLY_PAID,
@@ -722,6 +744,7 @@ def create_credit_note(
     )
     total = ZERO
     for index, payload in enumerate(lines, 1):
+        _validate_adjustment_line_relationships(source.company_id, payload)
         amount, tax = money(payload["amount"]), money(payload.get("tax_amount", ZERO))
         if amount <= 0 or tax < 0:
             raise ValidationError("Credit note amounts must be positive.")
@@ -744,7 +767,12 @@ def create_credit_note(
 
 @transaction.atomic
 def approve_credit_note(*, note: ClientCreditNote, actor: Any) -> ClientCreditNote:
-    item = ClientCreditNote.objects.select_for_update(of=("self",)).get(pk=note.pk)
+    item = cast(
+        ClientCreditNote,
+        consistent_queryset(ClientCreditNote.objects.select_for_update(of=("self",))).get(
+            pk=note.pk
+        ),
+    )
     if item.status not in {AdjustmentStatus.DRAFT, AdjustmentStatus.UNDER_REVIEW}:
         raise ValidationError("Credit note cannot be approved from its current state.")
     _maker_checker(item.created_by_id, actor)
@@ -755,17 +783,20 @@ def approve_credit_note(*, note: ClientCreditNote, actor: Any) -> ClientCreditNo
 
 @transaction.atomic
 def issue_credit_note(*, note: ClientCreditNote, actor: Any) -> ClientCreditNote:
-    item = (
-        ClientCreditNote.objects.select_for_update(of=("self",))
+    item = cast(
+        ClientCreditNote,
+        consistent_queryset(ClientCreditNote.objects.select_for_update(of=("self",)))
         .select_related("invoice")
-        .get(pk=note.pk)
+        .get(pk=note.pk),
     )
     if item.status != AdjustmentStatus.APPROVED:
         raise ValidationError("Only approved credit notes can be issued.")
     _maker_checker(item.created_by_id, actor)
-    profile = ClientBillingProfile.objects.get(client=item.client)
+    profile = consistent_queryset(
+        ClientBillingProfile.objects.filter(company=item.company, client=item.client)
+    ).get()
     journal_lines: list[dict[str, Any]] = []
-    for line in item.lines.select_related("revenue_account", "tax_account"):
+    for line in _consistent_adjustment_lines(item):
         journal_lines.append({"account": line.revenue_account, "debit": line.amount})
         if line.tax_amount:
             journal_lines.append(
@@ -789,7 +820,9 @@ def issue_credit_note(*, note: ClientCreditNote, actor: Any) -> ClientCreditNote
     )
     item.status, item.issued_by, item.accounting_journal = AdjustmentStatus.ISSUED, actor, journal
     item.save(update_fields=["status", "issued_by", "accounting_journal", "updated_at"])
-    invoice = ClientInvoice.objects.select_for_update(of=("self",)).get(pk=item.invoice_id)
+    invoice = consistent_queryset(ClientInvoice.objects.select_for_update(of=("self",))).get(
+        pk=item.invoice_id
+    )
     invoice.balance_due = money(invoice.balance_due - item.total_amount)
     invoice.status = (
         InvoiceStatus.PAID if invoice.balance_due == ZERO else InvoiceStatus.PARTIALLY_PAID
@@ -827,6 +860,17 @@ def create_debit_note(
     lines: list[dict[str, Any]],
     invoice: ClientInvoice | None = None,
 ) -> ClientDebitNote:
+    profile = consistent_queryset(ClientBillingProfile.objects.select_for_update(of=("self",))).get(
+        pk=profile.pk
+    )
+    if invoice is not None:
+        invoice = consistent_queryset(ClientInvoice.objects.all()).get(pk=invoice.pk)
+        if (
+            invoice.company_id != profile.company_id
+            or invoice.client_id != profile.client_id
+            or invoice.currency != profile.currency
+        ):
+            raise ValidationError("Invoice belongs to another company, client, or currency.")
     note = ClientDebitNote.objects.create(
         company=profile.company,
         client=profile.client,
@@ -841,6 +885,7 @@ def create_debit_note(
     )
     total = ZERO
     for index, payload in enumerate(lines, 1):
+        _validate_adjustment_line_relationships(profile.company_id, payload)
         amount, tax = money(payload["amount"]), money(payload.get("tax_amount", ZERO))
         if amount <= 0 or tax < 0:
             raise ValidationError("Debit note amounts must be positive.")
@@ -861,7 +906,12 @@ def create_debit_note(
 
 @transaction.atomic
 def approve_debit_note(*, note: ClientDebitNote, actor: Any) -> ClientDebitNote:
-    item = ClientDebitNote.objects.select_for_update(of=("self",)).get(pk=note.pk)
+    item = cast(
+        ClientDebitNote,
+        consistent_queryset(ClientDebitNote.objects.select_for_update(of=("self",))).get(
+            pk=note.pk
+        ),
+    )
     if item.status not in {AdjustmentStatus.DRAFT, AdjustmentStatus.UNDER_REVIEW}:
         raise ValidationError("Debit note cannot be approved.")
     _maker_checker(item.created_by_id, actor)
@@ -872,14 +922,21 @@ def approve_debit_note(*, note: ClientDebitNote, actor: Any) -> ClientDebitNote:
 
 @transaction.atomic
 def issue_debit_note(*, note: ClientDebitNote, actor: Any) -> ClientDebitNote:
-    item = ClientDebitNote.objects.select_for_update(of=("self",)).get(pk=note.pk)
+    item = cast(
+        ClientDebitNote,
+        consistent_queryset(ClientDebitNote.objects.select_for_update(of=("self",))).get(
+            pk=note.pk
+        ),
+    )
     if item.status != AdjustmentStatus.APPROVED:
         raise ValidationError("Only approved debit notes can be issued.")
-    profile = ClientBillingProfile.objects.get(client=item.client)
+    profile = consistent_queryset(
+        ClientBillingProfile.objects.filter(company=item.company, client=item.client)
+    ).get()
     journal_lines: list[dict[str, Any]] = [
         {"account": profile.default_receivable_account, "debit": item.total_amount}
     ]
-    for line in item.lines.select_related("revenue_account", "tax_account"):
+    for line in _consistent_adjustment_lines(item):
         journal_lines.append({"account": line.revenue_account, "credit": line.amount})
         if line.tax_amount:
             journal_lines.append(
@@ -901,7 +958,9 @@ def issue_debit_note(*, note: ClientDebitNote, actor: Any) -> ClientDebitNote:
     item.status, item.issued_by, item.accounting_journal = AdjustmentStatus.ISSUED, actor, journal
     item.save(update_fields=["status", "issued_by", "accounting_journal", "updated_at"])
     if item.invoice_id:
-        invoice = ClientInvoice.objects.select_for_update(of=("self",)).get(pk=item.invoice_id)
+        invoice = consistent_queryset(ClientInvoice.objects.select_for_update(of=("self",))).get(
+            pk=item.invoice_id
+        )
         invoice.balance_due = money(invoice.balance_due + item.total_amount)
         invoice.status = (
             InvoiceStatus.ISSUED if invoice.amount_paid == ZERO else InvoiceStatus.PARTIALLY_PAID

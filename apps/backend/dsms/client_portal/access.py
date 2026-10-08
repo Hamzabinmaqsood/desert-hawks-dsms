@@ -1,19 +1,18 @@
 # mypy: disable-error-code="no-untyped-def"
-from django.db import models
 from django.http import Http404
-from django.utils import timezone
+
+from dsms.contracts.api.security import consistent_queryset as consistent_contract_queryset
 
 from .models import ClientPortalMembership
+from .tenant_queries import active_memberships
 
 
 def resolve_membership(*, user, client_id, permission=None):
-    now = timezone.now()
     membership = (
-        ClientPortalMembership.objects.select_related("client", "role")
+        active_memberships(ClientPortalMembership.objects.all())
+        .select_related("client", "role")
         .prefetch_related("role__permissions", "site_access", "contract_access")
-        .filter(user=user, client_id=client_id, status="ACTIVE", role__is_active=True)
-        .filter(models.Q(starts_at__isnull=True) | models.Q(starts_at__lte=now))
-        .filter(models.Q(ends_at__isnull=True) | models.Q(ends_at__gt=now))
+        .filter(user=user, client_id=client_id)
         .first()
     )
     if not membership:
@@ -24,7 +23,7 @@ def resolve_membership(*, user, client_id, permission=None):
 
 
 def restrict_sites(queryset, membership):
-    queryset = queryset.filter(client=membership.client)
+    queryset = consistent_contract_queryset(queryset).filter(client=membership.client)
     if membership.access_mode == "SELECTED_SITES":
         queryset = queryset.filter(
             id__in=membership.site_access.filter(is_active=True).values("site_id")
@@ -33,13 +32,19 @@ def restrict_sites(queryset, membership):
 
 
 def can_access_site(membership, site):
-    return site.client_id == membership.client_id and (
-        membership.access_mode == "ALL_CLIENT_SITES"
-        or membership.site_access.filter(site=site, is_active=True).exists()
+    return (
+        consistent_contract_queryset(type(site).objects.filter(pk=site.pk)).exists()
+        and (site.client_id == membership.client_id)
+        and (
+            membership.access_mode == "ALL_CLIENT_SITES"
+            or membership.site_access.filter(site=site, is_active=True).exists()
+        )
     )
 
 
 def can_access_contract(membership, contract):
+    if not consistent_contract_queryset(type(contract).objects.filter(pk=contract.pk)).exists():
+        return False
     if contract.client_id != membership.client_id:
         return False
     restrictions = membership.contract_access.filter(is_active=True)

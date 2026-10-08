@@ -32,11 +32,26 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet[AuditEvent]):
 
     def get_queryset(self) -> models.QuerySet[AuditEvent]:
         user = cast(User, self.request.user)
+        queryset = AuditEvent.objects.select_related(
+            "actor_user", "actor_employee", "company", "region", "branch"
+        )
+        if user.is_superuser:
+            return queryset
         company_ids = access.get_accessible_company_ids(user, permission="audit.view_auditevent")
         branch_ids = access.get_accessible_branch_ids(user, permission="audit.view_auditevent")
         scope = models.Q(company_id__in=company_ids) | models.Q(branch_id__in=branch_ids)
-        if user.is_superuser:
-            scope |= models.Q(company__isnull=True, branch__isnull=True)
-        return AuditEvent.objects.filter(scope).select_related(
-            "actor_user", "actor_employee", "company", "region", "branch"
+        consistent = (
+            models.Q(company__is_active=True)
+            & (models.Q(region__isnull=True) | models.Q(region__company_id=models.F("company_id")))
+            & (models.Q(branch__isnull=True) | models.Q(branch__company_id=models.F("company_id")))
+            & (
+                models.Q(branch__isnull=True)
+                | models.Q(region__isnull=True)
+                | models.Q(branch__region_id=models.F("region_id"))
+            )
+            & (
+                models.Q(actor_employee__isnull=True)
+                | models.Q(actor_employee__company_id=models.F("company_id"))
+            )
         )
+        return queryset.filter(scope, consistent).distinct()

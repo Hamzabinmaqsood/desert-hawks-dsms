@@ -54,14 +54,15 @@ class WorkforceHeadcountProvider:
     def calculate(
         self, *, metric_definition: Any, period_start: date, period_end: date, **dimensions: Any
     ) -> AnalyticsMetricResult:
+        from dsms.deployment.tenant_queries import consistent_employees
         from dsms.workforce.models import Employee
 
         company = dimensions.get("company")
         if company is None:
             return _missing(period_start, period_end, "Company dimension is required.")
-        qs = Employee.objects.filter(company=company, joining_date__lte=period_end).filter(
-            models.Q(exit_date__isnull=True) | models.Q(exit_date__gte=period_start)
-        )
+        qs = consistent_employees(
+            Employee.objects.filter(company=company, joining_date__lte=period_end)
+        ).filter(models.Q(exit_date__isnull=True) | models.Q(exit_date__gte=period_start))
         for name in ("branch", "department"):
             value = dimensions.get(name)
             if value is not None:
@@ -76,11 +77,14 @@ class InvoiceValueProvider:
     def calculate(
         self, *, metric_definition: Any, period_start: date, period_end: date, **dimensions: Any
     ) -> AnalyticsMetricResult:
+        from dsms.billing.api.security import consistent_queryset
         from dsms.billing.models import ClientInvoice
 
         company = dimensions.get("company")
-        qs = ClientInvoice.objects.filter(
-            company=company, invoice_date__range=(period_start, period_end)
+        qs = consistent_queryset(
+            ClientInvoice.objects.filter(
+                company=company, invoice_date__range=(period_start, period_end)
+            )
         ).exclude(status__in=["DRAFT", "CANCELLED", "VOIDED"])
         currency = metric_definition.currency
         if currency:
@@ -109,10 +113,14 @@ class CollectionsProvider:
     def calculate(
         self, *, metric_definition: Any, period_start: date, period_end: date, **dimensions: Any
     ) -> AnalyticsMetricResult:
+        from dsms.billing.api.security import consistent_queryset
         from dsms.billing.models import ClientReceipt
 
-        qs = ClientReceipt.objects.filter(
-            company=dimensions.get("company"), received_at__date__range=(period_start, period_end)
+        qs = consistent_queryset(
+            ClientReceipt.objects.filter(
+                company=dimensions.get("company"),
+                received_at__date__range=(period_start, period_end),
+            )
         ).exclude(status__in=["DRAFT", "CANCELLED", "REVERSED"])
         if metric_definition.currency:
             qs = qs.filter(currency=metric_definition.currency)
@@ -140,10 +148,15 @@ class OutstandingARProvider:
     def calculate(
         self, *, metric_definition: Any, period_start: date, period_end: date, **dimensions: Any
     ) -> AnalyticsMetricResult:
+        from dsms.billing.api.security import consistent_queryset
         from dsms.billing.models import ClientInvoice
 
-        qs = ClientInvoice.objects.filter(
-            company=dimensions.get("company"), invoice_date__lte=period_end, balance_due__gt=0
+        qs = consistent_queryset(
+            ClientInvoice.objects.filter(
+                company=dimensions.get("company"),
+                invoice_date__lte=period_end,
+                balance_due__gt=0,
+            )
         ).exclude(status__in=["CANCELLED", "VOIDED"])
         if metric_definition.currency:
             qs = qs.filter(currency=metric_definition.currency)

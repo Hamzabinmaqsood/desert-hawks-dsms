@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
+from dsms.billing.api.security import consistent_queryset as consistent_billing_queryset
 from dsms.billing.models import ClientInvoice, ClientReceipt
 from dsms.billing.selectors import get_accounts_receivable_ageing, get_client_account_balance
 from dsms.client_portal.access import resolve_membership, restrict_sites
@@ -18,6 +19,12 @@ from dsms.client_portal.models import (
     ClientServiceRequest,
 )
 from dsms.client_portal.services import acknowledge_report, create_service_request
+from dsms.client_portal.tenant_queries import (
+    active_memberships,
+    consistent_reports,
+    consistent_service_requests,
+)
+from dsms.contracts.api.security import consistent_queryset as consistent_contract_queryset
 from dsms.contracts.models import SecuritySite, ServiceContract
 from dsms.incidents.models import Incident
 from dsms.incidents.tenant_queries import consistent_incidents
@@ -40,7 +47,9 @@ class MembershipsView(APIView):
 
     def get(self, request):
         items = (
-            ClientPortalMembership.objects.filter(user=request.user, status="ACTIVE")
+            active_memberships(
+                ClientPortalMembership.objects.filter(user=request.user, status="ACTIVE")
+            )
             .select_related("client", "role")
             .prefetch_related("role__permissions")
         )
@@ -82,7 +91,7 @@ class ContractsView(PortalBase):
 
     def get(self, request, client_uuid):
         member = self.membership(request, client_uuid)
-        qs = ServiceContract.objects.filter(client=member.client)
+        qs = consistent_contract_queryset(ServiceContract.objects.filter(client=member.client))
         restrictions = member.contract_access.filter(is_active=True)
         if restrictions.exists():
             qs = qs.filter(id__in=restrictions.values("contract_id"))
@@ -115,7 +124,9 @@ class ReportsView(PortalBase):
         member = self.membership(request, client_uuid)
         return Response(
             ReportSerializer(
-                ClientServiceReport.objects.filter(client=member.client, status="PUBLISHED"),
+                consistent_reports(
+                    ClientServiceReport.objects.filter(client=member.client, status="PUBLISHED")
+                ),
                 many=True,
             ).data
         )
@@ -127,7 +138,10 @@ class ReportAcknowledgeView(PortalBase):
     def post(self, request, client_uuid, report_uuid):
         member = self.membership(request, client_uuid)
         report = get_object_or_404(
-            ClientServiceReport, id=report_uuid, client=member.client, status="PUBLISHED"
+            consistent_reports(ClientServiceReport.objects.all()),
+            id=report_uuid,
+            client=member.client,
+            status="PUBLISHED",
         )
         ack = acknowledge_report(
             membership=member, report=report, comments=request.data.get("comments", "")
@@ -136,6 +150,8 @@ class ReportAcknowledgeView(PortalBase):
 
 
 class ServiceRequestsView(PortalBase):
+    permission_codename = "view_service_request"
+
     def get(self, request, client_uuid):
         member = self.membership(
             request,
@@ -143,7 +159,10 @@ class ServiceRequestsView(PortalBase):
         )
         return Response(
             ServiceRequestSerializer(
-                ClientServiceRequest.objects.filter(client=member.client), many=True
+                consistent_service_requests(
+                    ClientServiceRequest.objects.filter(client=member.client)
+                ),
+                many=True,
             ).data
         )
 
@@ -172,10 +191,12 @@ class ClientInvoicesView(PortalBase):
     @extend_schema(operation_id="client_portal_invoice_list")
     def get(self, request, client_uuid):
         member = self.membership(request, client_uuid)
-        queryset = ClientInvoice.objects.filter(
-            client=member.client,
-            status__in=["ISSUED", "PARTIALLY_PAID", "PAID", "DISPUTED"],
-        ).select_related("contract")
+        queryset = consistent_billing_queryset(
+            ClientInvoice.objects.filter(
+                client=member.client,
+                status__in=["ISSUED", "PARTIALLY_PAID", "PAID", "DISPUTED"],
+            ).select_related("contract")
+        )
         return Response(PortalInvoiceSerializer(queryset, many=True).data)
 
 
@@ -186,10 +207,12 @@ class ClientInvoiceDetailView(PortalBase):
     def get(self, request, client_uuid, invoice_uuid):
         member = self.membership(request, client_uuid)
         invoice = get_object_or_404(
-            ClientInvoice.objects.filter(
-                client=member.client,
-                status__in=["ISSUED", "PARTIALLY_PAID", "PAID", "DISPUTED"],
-            ).select_related("contract"),
+            consistent_billing_queryset(
+                ClientInvoice.objects.filter(
+                    client=member.client,
+                    status__in=["ISSUED", "PARTIALLY_PAID", "PAID", "DISPUTED"],
+                ).select_related("contract")
+            ),
             pk=invoice_uuid,
         )
         return Response(PortalInvoiceSerializer(invoice).data)
@@ -201,12 +224,17 @@ class ClientInvoiceDownloadView(PortalBase):
     def get(self, request, client_uuid, invoice_uuid):
         member = self.membership(request, client_uuid)
         invoice = get_object_or_404(
-            ClientInvoice.objects.filter(
-                client=member.client, status__in=["ISSUED", "PARTIALLY_PAID", "PAID", "DISPUTED"]
+            consistent_billing_queryset(
+                ClientInvoice.objects.filter(
+                    client=member.client,
+                    status__in=["ISSUED", "PARTIALLY_PAID", "PAID", "DISPUTED"],
+                )
             ),
             pk=invoice_uuid,
         )
-        document = invoice.documents.order_by("-revision_number").first()
+        document = consistent_billing_queryset(
+            invoice.documents.order_by("-revision_number")
+        ).first()
         if not document:
             raise Http404
         record_audit_event(
@@ -232,9 +260,9 @@ class ClientReceiptsView(PortalBase):
 
     def get(self, request, client_uuid):
         member = self.membership(request, client_uuid)
-        queryset = ClientReceipt.objects.filter(client=member.client).exclude(
-            status__in=["DRAFT", "CANCELLED"]
-        )
+        queryset = consistent_billing_queryset(
+            ClientReceipt.objects.filter(client=member.client)
+        ).exclude(status__in=["DRAFT", "CANCELLED"])
         return Response(PortalReceiptSerializer(queryset, many=True).data)
 
 
@@ -243,7 +271,9 @@ class ClientStatementView(PortalBase):
 
     def get(self, request, client_uuid):
         member = self.membership(request, client_uuid)
-        transactions = member.client.ar_transactions.order_by("effective_at", "id")
+        transactions = consistent_billing_queryset(
+            member.client.ar_transactions.order_by("effective_at", "id")
+        )
         running = 0
         rows = []
         for item in transactions:

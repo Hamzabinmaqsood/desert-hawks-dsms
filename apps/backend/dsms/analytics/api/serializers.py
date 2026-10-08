@@ -40,4 +40,21 @@ class SnapshotSerializer(serializers.ModelSerializer[AnalyticsSnapshot]):
 class DataQualityIssueSerializer(serializers.ModelSerializer[AnalyticsDataQualityIssue]):
     class Meta:
         model = AnalyticsDataQualityIssue
-        fields = "__all__"
+        fields = (
+            "id",
+            "company",
+            "metric_definition",
+            "source_app",
+            "issue_code",
+            "severity",
+            "description",
+            "branch",
+            "client",
+            "site",
+            "detected_at",
+            "resolved_at",
+            "status",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields

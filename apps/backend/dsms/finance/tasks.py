@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from celery import shared_task
 from django.db import transaction
+from django.db.models import F, Q
 from django.utils import timezone
 
 from .operations_models import CompanyExpense, RecurringExpenseTemplate
@@ -20,8 +21,22 @@ def generate_recurring_expense_drafts() -> int:
     created = 0
     today = timezone.localdate()
     with transaction.atomic():
-        templates = RecurringExpenseTemplate.objects.select_for_update().filter(
-            is_active=True, next_due_date__lte=today, created_by__isnull=False
+        templates = (
+            RecurringExpenseTemplate.objects.select_for_update(of=("self",))
+            .filter(
+                is_active=True,
+                next_due_date__lte=today,
+                created_by__isnull=False,
+                created_by__is_active=True,
+                company__is_active=True,
+                category__company_id=F("company_id"),
+                category__expense_account__company_id=F("company_id"),
+            )
+            .filter(
+                Q(branch__isnull=True) | Q(branch__company_id=F("company_id")),
+                Q(department__isnull=True) | Q(department__company_id=F("company_id")),
+                Q(cost_center__isnull=True) | Q(cost_center__company_id=F("company_id")),
+            )
         )
         for template in templates:
             assert template.created_by is not None

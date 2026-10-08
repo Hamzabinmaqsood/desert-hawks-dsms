@@ -283,6 +283,8 @@ test("least-privilege Vendor manager creates, edits, and searches Vendor master 
 test("least-privilege Bill author completes draft Vendor Bill authoring", async ({
   page,
 }) => {
+  // This full lifecycle takes about 36 seconds in the Next.js dev E2E harness.
+  test.setTimeout(60_000);
   await signIn(page, "billauthor@example.test");
   const session = await (await page.request.get("/api/auth/session")).json();
   expect(session.permissions).not.toContain("finance.manage_procurement");

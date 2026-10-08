@@ -313,7 +313,7 @@ def consistent_leave_requests(queryset: QuerySet[LeaveRequest]) -> QuerySet[Leav
         queryset.filter(company__is_active=True)
         .filter(employee__in=consistent_employees(Employee.objects.all()))
         .filter(employee__company_id=F("company_id"))
-        .filter(leave_type__company_id=F("company_id"))
+        .filter(Q(leave_type__company__isnull=True) | Q(leave_type__company_id=F("company_id")))
         .filter(policy__company_id=F("company_id"))
         .filter(policy_rule__policy_id=F("policy_id"))
         .filter(policy_rule__leave_type_id=F("leave_type_id"))

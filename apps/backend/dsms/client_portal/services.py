@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from uuid import uuid4
 
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from dsms.identity.models import User
@@ -14,9 +14,11 @@ from .models import (
     ClientPortalAuditEvent,
     ClientPortalInvitation,
     ClientPortalMembership,
+    ClientServiceReport,
     ClientServiceReportAcknowledgement,
     ClientServiceRequest,
 )
+from .tenant_queries import active_memberships, consistent_reports
 
 
 def _hash_token(token):
@@ -27,8 +29,12 @@ def _hash_token(token):
 def create_invitation(
     *, client, email, role, invited_by, client_contact=None, lifetime=timedelta(days=7)
 ):
+    if not client.company.is_active:
+        raise ValueError("An inactive company cannot invite portal users.")
     if not role.is_active:
         raise ValueError("An inactive portal role cannot be invited.")
+    if client_contact and client_contact.client_id != client.id:
+        raise ValueError("The portal contact belongs to another client.")
     token = secrets.token_urlsafe(32)
     invitation = ClientPortalInvitation.objects.create(
         client=client,
@@ -57,7 +63,15 @@ def accept_client_portal_invitation(*, raw_token, password=None):
     invitation = (
         ClientPortalInvitation.objects.select_for_update()
         .select_related("client", "role")
-        .filter(invitation_token_hash=token_hash)
+        .filter(
+            invitation_token_hash=token_hash,
+            client__company__is_active=True,
+            role__is_active=True,
+        )
+        .filter(
+            models.Q(client_contact__isnull=True)
+            | models.Q(client_contact__client_id=models.F("client_id"))
+        )
         .first()
     )
     if not invitation or invitation.status != "PENDING" or invitation.revoked_at:
@@ -110,7 +124,14 @@ def accept_client_portal_invitation(*, raw_token, password=None):
 def create_service_request(
     *, membership, request_type, priority, title, description, site=None, contract=None
 ):
-    if membership.status != "ACTIVE":
+    if (
+        membership.status != "ACTIVE"
+        or not active_memberships(
+            ClientPortalMembership.objects.filter(
+                pk=membership.pk,
+            )
+        ).exists()
+    ):
         raise ValueError("Active membership required.")
     if site and not can_access_site(membership, site):
         raise ValueError("Site is unavailable.")
@@ -140,8 +161,22 @@ def create_service_request(
 
 
 @transaction.atomic
-def acknowledge_report(*, membership, report, comments=""):
-    if report.client_id != membership.client_id or report.status != "PUBLISHED":
+def acknowledge_report(
+    *,
+    membership: ClientPortalMembership,
+    report: ClientServiceReport,
+    comments: str = "",
+) -> ClientServiceReportAcknowledgement:
+    if (
+        not active_memberships(ClientPortalMembership.objects.filter(pk=membership.pk)).exists()
+        or not consistent_reports(
+            type(report).objects.filter(
+                pk=report.pk,
+                client_id=membership.client_id,
+                status="PUBLISHED",
+            )
+        ).exists()
+    ):
         raise ValueError("Published report is unavailable.")
     acknowledgement, _ = ClientServiceReportAcknowledgement.objects.get_or_create(
         report=report,
