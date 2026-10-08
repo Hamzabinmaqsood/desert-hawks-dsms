@@ -3,8 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { POST as login } from "@/app/api/auth/login/route";
 import { POST as logout } from "@/app/api/auth/logout/route";
+import { PUT as switchCompany } from "@/app/api/auth/company-context/route";
 import { GET as session } from "@/app/api/auth/session/route";
-import { ACCESS_COOKIE, REFRESH_COOKIE } from "@/lib/auth/cookies";
+import {
+  ACCESS_COOKIE,
+  COMPANY_CONTEXT_COOKIE,
+  REFRESH_COOKIE,
+} from "@/lib/auth/cookies";
 import { proxy } from "@/proxy";
 
 const user = {
@@ -29,6 +34,29 @@ const scopes = {
   accessible_department_ids: [],
   accessible_operational_zone_ids: [],
   assignments: [],
+};
+
+const companyA = {
+  id: "00000000-0000-0000-0000-00000000000a",
+  code: "A",
+  display_name: "Company A",
+  legal_name: "Company A Limited",
+  is_active: true,
+};
+
+const companyB = {
+  id: "00000000-0000-0000-0000-00000000000b",
+  code: "B",
+  display_name: "Company B",
+  legal_name: "Company B Limited",
+  is_active: true,
+};
+
+const companyContext = {
+  user,
+  companies: [companyA],
+  selected_company: companyA,
+  selection_required: false,
 };
 
 function json(body: unknown, status = 200) {
@@ -99,6 +127,7 @@ describe("authentication BFF routes", () => {
     expect(response.cookies.get(REFRESH_COOKIE)?.httpOnly).toBe(true);
     expect(response.cookies.get(REFRESH_COOKIE)?.sameSite).toBe("lax");
     expect(response.cookies.get(REFRESH_COOKIE)?.path).toBe("/");
+    expect(response.cookies.get(COMPANY_CONTEXT_COOKIE)?.maxAge).toBe(0);
   });
 
   it("normalizes invalid credentials and backend outages", async () => {
@@ -147,7 +176,7 @@ describe("authentication BFF routes", () => {
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
         const url = String(input);
-        if (url.endsWith("/auth/me/")) return json(user);
+        if (url.endsWith("/auth/company-context/")) return json(companyContext);
         if (url.endsWith("/auth/me/permissions/"))
           return json({ permissions: ["billing.view_clientinvoice"] });
         return json(scopes);
@@ -165,6 +194,7 @@ describe("authentication BFF routes", () => {
     expect(body.user.email).toBe(user.email);
     expect(body.permissions).toEqual(["billing.view_clientinvoice"]);
     expect(body.scopes).toEqual(scopes);
+    expect(body.company_context.selected_company).toEqual(companyA);
   });
 
   it("refreshes exactly once, rotates cookies, and retries identity once", async () => {
@@ -180,7 +210,7 @@ describe("authentication BFF routes", () => {
         }
         identityCalls += 1;
         if (identityCalls <= 3) return json({ detail: "expired" }, 401);
-        if (url.endsWith("/auth/me/")) return json(user);
+        if (url.endsWith("/auth/company-context/")) return json(companyContext);
         if (url.endsWith("/auth/me/permissions/"))
           return json({ permissions: [] });
         return json(scopes);
@@ -219,22 +249,38 @@ describe("authentication BFF routes", () => {
     expect(response.status).toBe(401);
     expect(response.cookies.get(ACCESS_COOKIE)?.maxAge).toBe(0);
     expect(response.cookies.get(REFRESH_COOKIE)?.maxAge).toBe(0);
+    expect(response.cookies.get(COMPANY_CONTEXT_COOKIE)?.maxAge).toBe(0);
   });
 
   it("calls backend logout and always clears local cookies", async () => {
-    const backend = vi.fn(async () => new Response(null, { status: 204 }));
+    const backend = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) => {
+        void _input;
+        void _init;
+        return new Response(null, { status: 204 });
+      },
+    );
     vi.stubGlobal("fetch", backend);
     const response = await logout(
       request(
         "/api/auth/logout",
         { method: "POST" },
-        { [ACCESS_COOKIE]: "access", [REFRESH_COOKIE]: "refresh" },
+        {
+          [ACCESS_COOKIE]: "access",
+          [REFRESH_COOKIE]: "refresh",
+          [COMPANY_CONTEXT_COOKIE]: "context123",
+        },
       ),
     );
     expect(response.status).toBe(200);
     expect(backend).toHaveBeenCalledOnce();
     expect(response.cookies.get(ACCESS_COOKIE)?.maxAge).toBe(0);
     expect(response.cookies.get(REFRESH_COOKIE)?.maxAge).toBe(0);
+    expect(response.cookies.get(COMPANY_CONTEXT_COOKIE)?.maxAge).toBe(0);
+    const requestInit = backend.mock.calls[0]?.[1] as RequestInit;
+    expect(requestInit.headers).toMatchObject({
+      Cookie: "sessionid=context123",
+    });
   });
 
   it("refreshes an expired access token before revoking the rotated refresh token", async () => {
@@ -263,5 +309,81 @@ describe("authentication BFF routes", () => {
       JSON.stringify({ refresh: "rotated-refresh" }),
     );
     expect(response.cookies.get(REFRESH_COOKIE)?.maxAge).toBe(0);
+  });
+
+  it("switches Company through the backend and stores only its opaque session key", async () => {
+    const backend = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) => {
+        void _input;
+        void _init;
+        return new Response(
+          JSON.stringify({
+            user,
+            companies: [companyA, companyB],
+            selected_company: companyB,
+            selection_required: false,
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "Set-Cookie":
+                "sessionid=newcontext; Path=/; HttpOnly; SameSite=Lax",
+            },
+          },
+        );
+      },
+    );
+    vi.stubGlobal("fetch", backend);
+    const response = await switchCompany(
+      request(
+        "/api/auth/company-context",
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ company_id: companyB.id }),
+        },
+        {
+          [ACCESS_COOKIE]: "access",
+          [REFRESH_COOKIE]: "refresh",
+          [COMPANY_CONTEXT_COOKIE]: "oldcontext",
+        },
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).selected_company).toEqual(companyB);
+    expect(response.cookies.get(COMPANY_CONTEXT_COOKIE)?.value).toBe(
+      "newcontext",
+    );
+    expect(response.cookies.get(COMPANY_CONTEXT_COOKIE)?.httpOnly).toBe(true);
+    const backendInit = backend.mock.calls[0]?.[1] as RequestInit;
+    const backendHeaders = new Headers(backendInit.headers);
+    expect(backendInit.method).toBe("PUT");
+    expect(backendHeaders.get("Authorization")).toBe("Bearer access");
+    expect(backendHeaders.get("Cookie")).toBe("sessionid=oldcontext");
+    expect(backendInit.body).toBe(JSON.stringify({ company_id: companyB.id }));
+  });
+
+  it("normalizes inaccessible Company switch failures without storing context", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json({ detail: "Not found." }, 404)),
+    );
+    const response = await switchCompany(
+      request(
+        "/api/auth/company-context",
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ company_id: companyB.id }),
+        },
+        { [ACCESS_COOKIE]: "access", [REFRESH_COOKIE]: "refresh" },
+      ),
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({
+      message: "Company is unavailable.",
+    });
+    expect(response.cookies.get(COMPANY_CONTEXT_COOKIE)).toBeUndefined();
   });
 });

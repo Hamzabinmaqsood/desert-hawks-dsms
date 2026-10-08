@@ -209,13 +209,48 @@ a:focus-visible {
   min-height: 4.5rem;
   padding: 0.75rem 2rem;
 }
-.topbar > div {
+.topbar-identity {
   display: grid;
   gap: 0.2rem;
 }
 .topbar span {
   color: var(--muted);
   font-size: 0.8rem;
+}
+.topbar-actions {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+}
+.company-switcher {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 15rem;
+}
+.company-switcher label,
+.company-switcher > span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.company-switcher select {
+  min-width: 15rem;
+}
+.company-switcher small[role="alert"] {
+  color: var(--danger);
+}
+.company-switcher-empty strong {
+  font-size: 0.9rem;
+}
+.company-context-notice {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  max-width: 42rem;
+  padding: 2rem;
+}
+.company-context-notice h1 {
+  margin-top: 0;
 }
 .content {
   padding: 2rem;
@@ -439,6 +474,19 @@ a:focus-visible {
   .content {
     padding-left: 1rem;
     padding-right: 1rem;
+  }
+  .topbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .topbar-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .company-switcher,
+  .company-switcher select {
+    width: 100%;
   }
   .dashboard-grid {
     grid-template-columns: 1fr;

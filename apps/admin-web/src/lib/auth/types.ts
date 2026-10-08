@@ -34,11 +34,30 @@ export interface AccessScopes {
   assignments: AccessScopeAssignment[];
 }
 
+export interface SelectableCompany {
+  id: string;
+  code: string;
+  display_name: string;
+  legal_name: string;
+  is_active: boolean;
+}
+
+export interface CompanyContext {
+  companies: SelectableCompany[];
+  selected_company: SelectableCompany | null;
+  selection_required: boolean;
+}
+
+export interface CompanyContextBootstrap extends CompanyContext {
+  user: CurrentUser;
+}
+
 export interface SessionData {
   authenticated: true;
   user: CurrentUser;
   permissions: string[];
   scopes: AccessScopes;
+  company_context: CompanyContext;
 }
 
 export interface UnauthenticatedSession {

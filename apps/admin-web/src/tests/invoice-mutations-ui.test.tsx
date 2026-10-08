@@ -111,6 +111,25 @@ const baseSession: SessionData = {
     accessible_operational_zone_ids: [],
     assignments: [],
   },
+  company_context: {
+    companies: [
+      {
+        id: "company-1",
+        code: "C1",
+        display_name: "Company One",
+        legal_name: "Company One",
+        is_active: true,
+      },
+    ],
+    selected_company: {
+      id: "company-1",
+      code: "C1",
+      display_name: "Company One",
+      legal_name: "Company One",
+      is_active: true,
+    },
+    selection_required: false,
+  },
 };
 
 function renderWithSession(

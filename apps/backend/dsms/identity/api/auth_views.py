@@ -3,7 +3,7 @@
 from typing import Any, cast
 
 from drf_spectacular.utils import extend_schema
-from rest_framework import generics, permissions, status
+from rest_framework import generics, permissions, status, views
 from rest_framework.exceptions import APIException
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -12,14 +12,16 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
-from dsms.identity import access, selectors
+from dsms.identity import access, company_context, selectors
 from dsms.identity.models import User
 
 from .auth_serializers import (
     AccessScopeSummarySerializer,
+    CompanyContextResponseSerializer,
     LoginSerializer,
     LogoutSerializer,
     PermissionsResponseSerializer,
+    SelectCompanySerializer,
     TokenPairResponseSerializer,
     TokenRefreshResponseSerializer,
     TokenVerifyResponseSerializer,
@@ -87,6 +89,7 @@ class LogoutView(generics.GenericAPIView[Any]):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        company_context.clear_selected_company(request)
         record_audit_event(
             action="LOGOUT",
             category=AuditCategory.AUTHENTICATION,
@@ -133,3 +136,26 @@ class MeAccessScopesView(generics.GenericAPIView[Any]):
         user = cast(User, request.user)
         data = access.get_access_scope_summary(user)
         return Response(self.get_serializer(data).data)
+
+
+class CompanyContextView(views.APIView):
+    """Bootstrap and switch the authenticated user's selected Company context."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(tags=["Authentication"], responses=CompanyContextResponseSerializer)
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        payload = company_context.build_company_context(request)
+        return Response(CompanyContextResponseSerializer(payload).data)
+
+    @extend_schema(
+        tags=["Authentication"],
+        request=SelectCompanySerializer,
+        responses=CompanyContextResponseSerializer,
+    )
+    def put(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        serializer = SelectCompanySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        company_context.select_company(request, serializer.validated_data["company_id"])
+        payload = company_context.build_company_context(request)
+        return Response(CompanyContextResponseSerializer(payload).data)

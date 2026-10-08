@@ -10,11 +10,17 @@ import {
 } from "@/lib/auth/backend";
 import {
   ACCESS_COOKIE,
+  backendSessionHeaders,
   clearSessionCookies,
   REFRESH_COOKIE,
   setSessionCookies,
+  syncCompanyContextCookie,
 } from "@/lib/auth/cookies";
-import type { AccessScopes, CurrentUser, SessionData } from "@/lib/auth/types";
+import type {
+  AccessScopes,
+  CompanyContextBootstrap,
+  SessionData,
+} from "@/lib/auth/types";
 
 interface TokenPair {
   access: string;
@@ -43,34 +49,49 @@ async function refreshTokens(refresh: string): Promise<TokenPair | null> {
   }
 }
 
-async function fetchIdentity(access: string) {
-  const headers = { Authorization: `Bearer ${access}` };
-  const [user, permissions, scopes] = await Promise.all([
-    backendRequest<CurrentUser>("auth/me/", { headers }),
+async function fetchIdentity(
+  access: string,
+  reader: CookieReader,
+  writer?: ResponseCookies,
+) {
+  const headers: Record<string, string> = {
+    ...backendSessionHeaders(reader),
+    Authorization: `Bearer ${access}`,
+  };
+  const [context, permissions, scopes] = await Promise.all([
+    backendRequest<CompanyContextBootstrap>("auth/company-context/", {
+      headers,
+    }),
     backendRequest<{ permissions: string[] }>("auth/me/permissions/", {
       headers,
     }),
     backendRequest<AccessScopes>("auth/me/access-scopes/", { headers }),
   ]);
-  if ([user, permissions, scopes].some((result) => result.status === 401))
+  if ([context, permissions, scopes].some((result) => result.status === 401))
     return { status: 401 };
   if (
-    !user.ok ||
+    !context.ok ||
     !permissions.ok ||
     !scopes.ok ||
-    !user.data ||
+    !context.data ||
     !permissions.data ||
     !scopes.data
   ) {
     return { status: 503 };
   }
+  if (writer) syncCompanyContextCookie(writer, context.headers);
   return {
     status: 200,
     session: {
       authenticated: true,
-      user: user.data,
+      user: context.data.user,
       permissions: permissions.data.permissions,
       scopes: scopes.data,
+      company_context: {
+        companies: context.data.companies,
+        selected_company: context.data.selected_company,
+        selection_required: context.data.selection_required,
+      },
     } satisfies SessionData,
   };
 }
@@ -83,7 +104,7 @@ export async function loadSession(
   const refresh = reader.get(REFRESH_COOKIE)?.value;
   if (!access || !refresh) return { status: 401 as const };
 
-  const first = await fetchIdentity(access);
+  const first = await fetchIdentity(access, reader, writer);
   if (first.status !== 401) return first;
 
   const tokens = await refreshTokens(refresh);
@@ -96,7 +117,7 @@ export async function loadSession(
       access: tokens.access,
       refresh: tokens.refresh ?? refresh,
     });
-  const retried = await fetchIdentity(tokens.access);
+  const retried = await fetchIdentity(tokens.access, reader, writer);
   if (retried.status === 401 && writer) clearSessionCookies(writer);
   return retried;
 }
@@ -131,11 +152,21 @@ export async function authenticatedBackendRequest<T>(
   const access = reader.get(ACCESS_COOKIE)?.value;
   const refresh = reader.get(REFRESH_COOKIE)?.value;
   if (!access || !refresh) return { ok: false, status: 401, data: null };
-  const send = (token: string) =>
-    backendRequest<T>(path, {
-      ...init,
-      headers: { ...init.headers, Authorization: `Bearer ${token}` },
+  const send = async (token: string) => {
+    const headers: Record<string, string> = {};
+    new Headers(init.headers).forEach((value, name) => {
+      headers[name] = value;
     });
+    for (const [name, value] of Object.entries(backendSessionHeaders(reader)))
+      headers[name] = value;
+    headers.Authorization = `Bearer ${token}`;
+    const result = await backendRequest<T>(path, {
+      ...init,
+      headers,
+    });
+    syncCompanyContextCookie(writer, result.headers);
+    return result;
+  };
   const first = await send(access);
   if (first.status !== 401) return first;
   const tokens = await refreshTokens(refresh);

@@ -4,6 +4,7 @@ export interface BackendResult<T> {
   ok: boolean;
   status: number;
   data: T | null;
+  headers?: Headers;
 }
 
 function backendBaseUrl() {
@@ -36,7 +37,12 @@ export async function backendRequest<T>(
       data = null;
     }
   }
-  return { ok: response.ok, status: response.status, data };
+  return {
+    ok: response.ok,
+    status: response.status,
+    data,
+    headers: response.headers,
+  };
 }
 
 export async function backendDownload(path: string, accessToken: string) {

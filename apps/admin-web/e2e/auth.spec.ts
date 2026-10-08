@@ -4,6 +4,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 const DRAFT_INVOICE_ID = "90000000-0000-0000-0000-000000000001";
 const VENDOR_BILL_ACCOUNT_ID = "50000000-0000-0000-0000-000000000300";
+const COMPANY_A_ID = "00000000-0000-0000-0000-000000000002";
+const COMPANY_B_ID = "00000000-0000-0000-0000-000000000003";
 
 async function signIn(page: Page, email: string) {
   await page.goto("/login");
@@ -39,6 +41,30 @@ test("employee signs in, uses the protected shell, and signs out", async ({
   await expect(page).toHaveURL(/\/login$/);
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/login$/);
+});
+
+test("multi-company employee explicitly selects and switches active Company", async ({
+  page,
+}) => {
+  await signIn(page, "multicompany@example.test");
+  await expect(
+    page.getByRole("heading", { name: "Select a Company" }),
+  ).toBeVisible();
+  const switcher = page.getByLabel("Active Company");
+  await expect(switcher).toHaveValue("");
+
+  await switcher.selectOption({ label: "DHA — Desert Hawks Alpha" });
+  await expect(switcher).toHaveValue(COMPANY_A_ID);
+  await expect(
+    page.getByRole("heading", { name: "Welcome, Multi" }),
+  ).toBeVisible();
+
+  await switcher.selectOption({ label: "DHB — Desert Hawks Bravo" });
+  await expect(switcher).toHaveValue(COMPANY_B_ID);
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(
+    page.getByText("multicompany@example.test").first(),
+  ).toBeVisible();
 });
 
 test("employee reads an Invoice list and detail", async ({ page }) => {

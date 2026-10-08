@@ -4,12 +4,14 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LoginForm } from "@/components/auth/login-form";
 import { AppShell } from "@/components/layout/app-shell";
 import LoginPage from "@/app/(auth)/login/page";
+import { AuthProvider } from "@/features/auth/auth-context";
 import type { SessionData } from "@/lib/auth/types";
 
 const replace = vi.fn();
@@ -43,6 +45,25 @@ const session: SessionData = {
     accessible_department_ids: [],
     accessible_operational_zone_ids: [],
     assignments: [],
+  },
+  company_context: {
+    companies: [
+      {
+        id: "company-a",
+        code: "A",
+        display_name: "Company A",
+        legal_name: "Company A Limited",
+        is_active: true,
+      },
+    ],
+    selected_company: {
+      id: "company-a",
+      code: "A",
+      display_name: "Company A",
+      legal_name: "Company A Limited",
+      is_active: true,
+    },
+    selection_required: false,
   },
 };
 
@@ -128,9 +149,11 @@ describe("authentication components", () => {
 
   it("renders the authenticated shell, user, and permitted navigation", () => {
     render(
-      <AppShell session={session}>
-        <p>Protected content</p>
-      </AppShell>,
+      <AuthProvider session={session}>
+        <AppShell>
+          <p>Protected content</p>
+        </AppShell>
+      </AuthProvider>,
     );
     expect(screen.getByText("Test Employee")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();
@@ -144,18 +167,188 @@ describe("authentication components", () => {
       ),
     ).toBe("/brand/desert-hawks-logo.png");
     expect(screen.queryByRole("link", { name: "Invoices" })).toBeNull();
+    expect(
+      (screen.getByLabelText("Active Company") as HTMLSelectElement).value,
+    ).toBe("company-a");
+    expect(
+      (screen.getByLabelText("Active Company") as HTMLSelectElement).disabled,
+    ).toBe(true);
+  });
+
+  it("adopts server context changes after membership is revoked", async () => {
+    const view = (currentSession: SessionData) => (
+      <AuthProvider session={currentSession}>
+        <AppShell>
+          <p>Company A content</p>
+        </AppShell>
+      </AuthProvider>
+    );
+    const { rerender } = render(view(session));
+    expect(screen.getByText("Company A content")).toBeTruthy();
+
+    rerender(
+      view({
+        ...session,
+        company_context: {
+          companies: [],
+          selected_company: null,
+          selection_required: false,
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "No Company access" }),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByText("Company A content")).toBeNull();
   });
 
   it("shows Invoice navigation only with Invoice view permission", () => {
     render(
-      <AppShell
+      <AuthProvider
         session={{ ...session, permissions: ["billing.view_clientinvoice"] }}
       >
-        <p>Protected content</p>
-      </AppShell>,
+        <AppShell>
+          <p>Protected content</p>
+        </AppShell>
+      </AuthProvider>,
     );
     expect(
       screen.getByRole("link", { name: "Invoices" }).getAttribute("href"),
     ).toBe("/invoices");
+  });
+
+  it("requires an explicit multi-company selection and refreshes at a neutral route", async () => {
+    const companyB = {
+      id: "company-b",
+      code: "B",
+      display_name: "Company B",
+      legal_name: "Company B Limited",
+      is_active: true,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              companies: [...session.company_context.companies, companyB],
+              selected_company: companyB,
+              selection_required: false,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+    render(
+      <AuthProvider
+        session={{
+          ...session,
+          company_context: {
+            companies: [...session.company_context.companies, companyB],
+            selected_company: null,
+            selection_required: true,
+          },
+        }}
+      >
+        <AppShell>
+          <p>Tenant A data</p>
+        </AppShell>
+      </AuthProvider>,
+    );
+    expect(
+      screen.getByRole("heading", { name: "Select a Company" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Tenant A data")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Active Company"), {
+      target: { value: "company-b" },
+    });
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/dashboard"));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(
+      (screen.getByLabelText("Active Company") as HTMLSelectElement).value,
+    ).toBe("company-b");
+  });
+
+  it("disables switching while pending and preserves context on failure", async () => {
+    const companyB = {
+      id: "company-b",
+      code: "B",
+      display_name: "Company B",
+      legal_name: "Company B Limited",
+      is_active: true,
+    };
+    let finish: ((response: Response) => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    );
+    render(
+      <AuthProvider
+        session={{
+          ...session,
+          company_context: {
+            companies: [...session.company_context.companies, companyB],
+            selected_company: session.company_context.selected_company,
+            selection_required: false,
+          },
+        }}
+      >
+        <AppShell>
+          <p>Company A content</p>
+        </AppShell>
+      </AuthProvider>,
+    );
+    fireEvent.change(screen.getByLabelText("Active Company"), {
+      target: { value: "company-b" },
+    });
+    expect(
+      (screen.getByLabelText("Active Company") as HTMLSelectElement).disabled,
+    ).toBe(true);
+    await act(async () =>
+      finish?.(
+        new Response(JSON.stringify({ message: "Company is unavailable." }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    expect(screen.getByRole("alert").textContent).toContain("unavailable");
+    expect(
+      (screen.getByLabelText("Active Company") as HTMLSelectElement).value,
+    ).toBe("company-a");
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("shows a safe no-company state without inventing tenant options", () => {
+    render(
+      <AuthProvider
+        session={{
+          ...session,
+          company_context: {
+            companies: [],
+            selected_company: null,
+            selection_required: false,
+          },
+        }}
+      >
+        <AppShell>
+          <p>Hidden tenant content</p>
+        </AppShell>
+      </AuthProvider>,
+    );
+    expect(
+      screen.getByRole("heading", { name: "No Company access" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Hidden tenant content")).toBeNull();
+    expect(screen.queryByText("Company B")).toBeNull();
   });
 });

@@ -15,7 +15,7 @@ export default async function ProtectedLayout({
   if (result.status !== 200 || !result.session) redirect("/login");
   return (
     <AuthProvider session={result.session}>
-      <AppShell session={result.session}>{children}</AppShell>
+      <AppShell>{children}</AppShell>
     </AuthProvider>
   );
 }

@@ -51,6 +51,25 @@ const session: SessionData = {
     accessible_operational_zone_ids: [],
     assignments: [],
   },
+  company_context: {
+    companies: [
+      {
+        id: "c",
+        code: "C",
+        display_name: "Company",
+        legal_name: "Company",
+        is_active: true,
+      },
+    ],
+    selected_company: {
+      id: "c",
+      code: "C",
+      display_name: "Company",
+      legal_name: "Company",
+      is_active: true,
+    },
+    selection_required: false,
+  },
 };
 
 const vendor = {

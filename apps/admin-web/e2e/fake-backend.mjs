@@ -1,7 +1,10 @@
 import { createServer } from "node:http";
 
-const json = (response, status, body) => {
-  response.writeHead(status, { "Content-Type": "application/json" });
+const json = (response, status, body, headers = {}) => {
+  response.writeHead(status, {
+    "Content-Type": "application/json",
+    ...headers,
+  });
   response.end(JSON.stringify(body));
 };
 
@@ -20,6 +23,21 @@ const readJsonBody = (request) =>
 
 const MAKER_ID = "00000000-0000-0000-0000-000000000001";
 const APPROVER_ID = "00000000-0000-0000-0000-000000000002";
+const COMPANY_A = {
+  id: "00000000-0000-0000-0000-000000000002",
+  code: "DHA",
+  display_name: "Desert Hawks Alpha",
+  legal_name: "Desert Hawks Alpha Limited",
+  is_active: true,
+};
+const COMPANY_B = {
+  id: "00000000-0000-0000-0000-000000000003",
+  code: "DHB",
+  display_name: "Desert Hawks Bravo",
+  legal_name: "Desert Hawks Bravo Limited",
+  is_active: true,
+};
+const companyContexts = new Map();
 
 // Two logical actors so maker/checker separation is exercised for real: the
 // maker may author and submit, the approver may approve, issue and download.
@@ -37,6 +55,14 @@ const ACTORS = {
     first_name: "Test",
     last_name: "Employee",
     permissions: AUTHORING_PERMISSIONS,
+  },
+  multicompany: {
+    id: MAKER_ID,
+    email: "multicompany@example.test",
+    first_name: "Multi",
+    last_name: "Company",
+    permissions: AUTHORING_PERMISSIONS,
+    companies: [COMPANY_A, COMPANY_B],
   },
   maker: {
     id: MAKER_ID,
@@ -149,6 +175,40 @@ const actorKeyForEmail = (email) => {
 const actorForToken = (authorization) => {
   const key = String(authorization ?? "").split("-")[2];
   return ACTORS[key] ?? ACTORS.employee;
+};
+
+const actorBody = (actor) => ({
+  id: actor.id,
+  email: actor.email,
+  first_name: actor.first_name,
+  last_name: actor.last_name,
+  is_active: true,
+  is_staff: false,
+  is_superuser: false,
+  last_login: null,
+  date_joined: "2026-01-01T00:00:00Z",
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+});
+
+const contextSessionId = (request) =>
+  String(request.headers.cookie ?? "").match(
+    /(?:^|;\s*)sessionid=([^;]+)/,
+  )?.[1];
+
+const contextBody = (request, actor) => {
+  const companies = actor.companies ?? [COMPANY_A];
+  const sessionId = contextSessionId(request);
+  const selectedId =
+    companies.length === 1 ? companies[0].id : companyContexts.get(sessionId);
+  const selectedCompany =
+    companies.find((company) => company.id === selectedId) ?? null;
+  return {
+    user: actorBody(actor),
+    companies,
+    selected_company: selectedCompany,
+    selection_required: companies.length > 0 && !selectedCompany,
+  };
 };
 
 const DRAFT_ID = "90000000-0000-0000-0000-000000000001";
@@ -395,6 +455,7 @@ createServer(async (request, response) => {
     });
   }
   if (path === "/api/v1/auth/logout/" && request.method === "POST") {
+    companyContexts.delete(contextSessionId(request));
     response.writeHead(204);
     return response.end();
   }
@@ -402,20 +463,26 @@ createServer(async (request, response) => {
     return json(response, 401, { detail: "Unauthenticated" });
   }
   const actor = actorForToken(request.headers.authorization);
-  if (path === "/api/v1/auth/me/") {
-    return json(response, 200, {
-      id: actor.id,
-      email: actor.email,
-      first_name: actor.first_name,
-      last_name: actor.last_name,
-      is_active: true,
-      is_staff: false,
-      is_superuser: false,
-      last_login: null,
-      date_joined: "2026-01-01T00:00:00Z",
-      created_at: "2026-01-01T00:00:00Z",
-      updated_at: "2026-01-01T00:00:00Z",
+  if (path === "/api/v1/auth/company-context/" && request.method === "GET") {
+    return json(response, 200, contextBody(request, actor));
+  }
+  if (path === "/api/v1/auth/company-context/" && request.method === "PUT") {
+    const body = await readJsonBody(request);
+    const companies = actor.companies ?? [COMPANY_A];
+    if (!companies.some((company) => company.id === body.company_id)) {
+      return json(response, 404, { detail: "Not found." });
+    }
+    const sessionId = `context${String(actor.email).split("@")[0]}${String(body.company_id).slice(-1)}`;
+    companyContexts.set(sessionId, body.company_id);
+    const syntheticRequest = {
+      headers: { cookie: `sessionid=${sessionId}` },
+    };
+    return json(response, 200, contextBody(syntheticRequest, actor), {
+      "Set-Cookie": `sessionid=${sessionId}; Path=/; HttpOnly; SameSite=Lax`,
     });
+  }
+  if (path === "/api/v1/auth/me/") {
+    return json(response, 200, actorBody(actor));
   }
   if (path === "/api/v1/auth/me/permissions/") {
     return json(response, 200, { permissions: actor.permissions });
@@ -423,7 +490,9 @@ createServer(async (request, response) => {
   if (path === "/api/v1/auth/me/access-scopes/") {
     return json(response, 200, {
       is_superuser: false,
-      accessible_company_ids: ["00000000-0000-0000-0000-000000000002"],
+      accessible_company_ids: (actor.companies ?? [COMPANY_A]).map(
+        (company) => company.id,
+      ),
       accessible_region_ids: [],
       accessible_branch_ids: [],
       accessible_department_ids: [],

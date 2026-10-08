@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { backendRequest } from "@/lib/auth/backend";
-import { setSessionCookies } from "@/lib/auth/cookies";
+import {
+  clearCompanyContextCookie,
+  setSessionCookies,
+} from "@/lib/auth/cookies";
 import { isSameOrigin } from "@/lib/auth/origin";
 
 interface TokenPair {
@@ -53,6 +56,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ message, fieldErrors: {} }, { status });
   }
   const response = NextResponse.json({ authenticated: true });
+  clearCompanyContextCookie(response.cookies);
   setSessionCookies(response.cookies, result.data);
   return response;
 }

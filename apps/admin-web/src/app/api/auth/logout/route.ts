@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { backendRequest } from "@/lib/auth/backend";
 import {
   ACCESS_COOKIE,
+  backendSessionHeaders,
   clearSessionCookies,
   REFRESH_COOKIE,
 } from "@/lib/auth/cookies";
@@ -28,6 +29,7 @@ export async function POST(request: NextRequest) {
         headers: {
           Authorization: `Bearer ${access}`,
           "Content-Type": "application/json",
+          ...backendSessionHeaders(request.cookies),
         },
         body: JSON.stringify({ refresh }),
       });

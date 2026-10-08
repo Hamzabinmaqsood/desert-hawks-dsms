@@ -5,6 +5,10 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from dsms.organization.models import Company
+
+from .serializers import UserReadSerializer
+
 
 class LoginSerializer(TokenObtainPairSerializer):
     """Email+password login. Normalizes the email before authenticating.
@@ -69,3 +73,26 @@ class AccessScopeSummarySerializer(serializers.Serializer[Any]):
     accessible_department_ids = serializers.ListField(child=serializers.UUIDField())
     accessible_operational_zone_ids = serializers.ListField(child=serializers.UUIDField())
     assignments = AccessScopeAssignmentSerializer(many=True)
+
+
+class CompanyContextCompanySerializer(serializers.ModelSerializer[Company]):
+    display_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Company
+        fields = ("id", "code", "display_name", "legal_name", "is_active")
+        read_only_fields = fields
+
+    def get_display_name(self, obj: Company) -> str:
+        return obj.trade_name or obj.legal_name
+
+
+class CompanyContextResponseSerializer(serializers.Serializer[Any]):
+    user = UserReadSerializer(read_only=True)
+    companies = CompanyContextCompanySerializer(many=True, read_only=True)
+    selected_company = CompanyContextCompanySerializer(read_only=True, allow_null=True)
+    selection_required = serializers.BooleanField(read_only=True)
+
+
+class SelectCompanySerializer(serializers.Serializer[Any]):
+    company_id = serializers.UUIDField()
