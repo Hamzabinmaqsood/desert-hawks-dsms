@@ -72,7 +72,7 @@ def resolve_attendance_policy(
     post: SecurityPost | None,
     at_datetime: datetime,
 ) -> AttendancePolicy | None:
-    day = at_datetime.date()
+    day = timezone.localdate(at_datetime)
     policies = consistent_attendance_policies(
         AttendancePolicy.objects.filter(company=company, is_active=True, effective_from__lte=day)
     ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=day))

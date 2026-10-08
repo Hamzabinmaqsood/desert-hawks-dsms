@@ -1,5 +1,5 @@
 # mypy: disable-error-code="misc,arg-type,attr-defined"
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -10,6 +10,7 @@ from dsms.attendance.models import AttendancePolicy, AttendanceQRStation
 from dsms.attendance.services import (
     evaluate_geofence,
     generate_qr_station_token,
+    resolve_attendance_policy,
     verify_attendance_qr,
 )
 from dsms.contracts.models import Client, ClientIndustry, SecuritySite, ServiceContract
@@ -60,7 +61,7 @@ def test_qr_secret_is_hashed_and_geofence_is_deterministic() -> None:
         company=company,
         site=site,
         name="Site policy",
-        effective_from=date.today(),
+        effective_from=date(2026, 10, 8),
         require_gps=True,
         require_qr=True,
         maximum_gps_accuracy_meters=Decimal("50"),
@@ -79,6 +80,16 @@ def test_qr_secret_is_hashed_and_geofence_is_deterministic() -> None:
     assert token not in station.token_hash
     assert verify_attendance_qr(station=station, submitted_token=token, site=site)
     assert not verify_attendance_qr(station=station, submitted_token="wrong", site=site)
+    assert (
+        resolve_attendance_policy(
+            company=company,
+            branch=branch,
+            site=site,
+            post=None,
+            at_datetime=datetime(2026, 10, 7, 20, tzinfo=UTC),
+        )
+        == policy
+    )
     result = evaluate_geofence(
         site=site,
         latitude=Decimal("33.710000"),
