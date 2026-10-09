@@ -85,7 +85,14 @@ def test_authenticated_user_without_any_role_is_forbidden(
 def test_superuser_can_list_and_create_company(client: APIClient, superuser: User) -> None:
     _auth(client, superuser)
     create_response = client.post(
-        "/api/v1/organization/companies/", {"code": "st1", "legal_name": "Staff Co"}
+        "/api/v1/organization/companies/",
+        {
+            "code": "st1",
+            "legal_name": "Staff Co",
+            "timezone": "Europe/London",
+            "default_currency": "GBP",
+            "country_code": "GB",
+        },
     )
     assert create_response.status_code == 201
     assert create_response.json()["code"] == "ST1"

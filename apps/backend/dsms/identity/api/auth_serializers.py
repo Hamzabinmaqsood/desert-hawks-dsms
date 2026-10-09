@@ -6,6 +6,12 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from dsms.identity import access
+from dsms.organization.business_defaults import (
+    normalize_currency_code,
+    normalize_document_prefix,
+    validate_currency_code,
+    validate_timezone_name,
+)
 from dsms.organization.models import Company
 
 from .serializers import UserReadSerializer
@@ -119,6 +125,34 @@ class CompanyBrandingSerializer(serializers.Serializer[Any]):
         )
 
 
+class CompanyBusinessSettingsSerializer(serializers.ModelSerializer[Company]):
+    can_manage = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Company
+        fields = (
+            "default_currency",
+            "timezone",
+            "invoice_number_prefix",
+            "receipt_number_prefix",
+            "credit_note_number_prefix",
+            "debit_note_number_prefix",
+            "can_manage",
+        )
+        read_only_fields = fields
+
+    def get_can_manage(self, obj: Company) -> bool:
+        request = self.context.get("request")
+        return bool(
+            request
+            and access.has_permission(
+                user=request.user,
+                permission="organization.change_company",
+                company=obj,
+            )
+        )
+
+
 class SelectedCompanyContextSerializer(CompanyContextCompanySerializer):
     branding = CompanyBrandingSerializer(source="*", read_only=True)
 
@@ -173,3 +207,60 @@ class CompanyBrandingUpdateSerializer(serializers.Serializer[Any]):
 
     def validate_accent_color(self, value: str) -> str:
         return value.upper()
+
+
+class CompanyBusinessSettingsUpdateSerializer(serializers.Serializer[Any]):
+    default_currency = serializers.CharField(max_length=3, required=False)
+    timezone = serializers.CharField(max_length=64, required=False, trim_whitespace=True)
+    invoice_number_prefix = serializers.RegexField(
+        regex=r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,8}[A-Za-z0-9])?$", required=False
+    )
+    receipt_number_prefix = serializers.RegexField(
+        regex=r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,8}[A-Za-z0-9])?$", required=False
+    )
+    credit_note_number_prefix = serializers.RegexField(
+        regex=r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,8}[A-Za-z0-9])?$", required=False
+    )
+    debit_note_number_prefix = serializers.RegexField(
+        regex=r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,8}[A-Za-z0-9])?$", required=False
+    )
+
+    def to_internal_value(self, data: Any) -> dict[str, Any]:
+        if isinstance(data, dict):
+            unsupported = sorted(set(data) - set(self.fields))
+            if unsupported:
+                raise serializers.ValidationError(
+                    {name: ["This field is not supported."] for name in unsupported}
+                )
+        return cast(dict[str, Any], super().to_internal_value(data))
+
+    def validate_default_currency(self, value: str) -> str:
+        normalized = normalize_currency_code(value)
+        validate_currency_code(normalized)
+        return normalized
+
+    def validate_timezone(self, value: str) -> str:
+        validate_timezone_name(value)
+        return value
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        prefix_fields = (
+            "invoice_number_prefix",
+            "receipt_number_prefix",
+            "credit_note_number_prefix",
+            "debit_note_number_prefix",
+        )
+        for name in prefix_fields:
+            if name in attrs:
+                attrs[name] = normalize_document_prefix(attrs[name])
+        company = cast(Company | None, self.context.get("company"))
+        if company:
+            prefixes = {name: attrs.get(name, getattr(company, name)) for name in prefix_fields}
+            duplicate_errors = {
+                name: ["Document numbering prefixes must be unique per Company."]
+                for name, value in prefixes.items()
+                if sum(candidate == value for candidate in prefixes.values()) > 1
+            }
+            if duplicate_errors:
+                raise serializers.ValidationError(duplicate_errors)
+        return attrs

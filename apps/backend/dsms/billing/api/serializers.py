@@ -10,6 +10,10 @@ from dsms.finance.models import Account, CostCenter
 from dsms.finance.operations_models import BankAccount
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.organization.business_defaults import (
+    normalize_currency_code,
+    validate_currency_code,
+)
 from dsms.organization.models import Company
 
 from ..enums import InvoiceType
@@ -78,6 +82,14 @@ class TenantSafeBillingSerializer(serializers.ModelSerializer[Any]):
                     {"company": "Company ownership cannot be changed."}
                 )
             owner = attrs.get("company", getattr(instance, "company", None))
+        if model is ClientBillingProfile and instance is None and "currency" not in attrs and owner:
+            attrs["currency"] = owner.default_currency
+        if "currency" in attrs:
+            attrs["currency"] = normalize_currency_code(attrs["currency"])
+            try:
+                validate_currency_code(attrs["currency"])
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError({"currency": exc.messages}) from exc
         company_id = company_id_for(owner)
         errors: dict[str, str] = {}
         for field in model._meta.fields:  # type: ignore[attr-defined]
@@ -401,6 +413,14 @@ class ReceiptSerializer(serializers.ModelSerializer[ClientReceipt]):
         company = attrs.get("company", getattr(self.instance, "company", None))
         client = attrs.get("client", getattr(self.instance, "client", None))
         bank = attrs.get("bank_account", getattr(self.instance, "bank_account", None))
+        if self.instance is None and "currency" not in attrs and company:
+            attrs["currency"] = company.default_currency
+        if "currency" in attrs:
+            attrs["currency"] = normalize_currency_code(attrs["currency"])
+            try:
+                validate_currency_code(attrs["currency"])
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError({"currency": exc.messages}) from exc
         if client and company and client.company_id != company.id:
             raise serializers.ValidationError({"client": "Client belongs to another company."})
         if bank and company and bank.company_id != company.id:

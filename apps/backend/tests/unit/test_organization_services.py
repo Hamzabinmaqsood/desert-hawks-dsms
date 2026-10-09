@@ -29,16 +29,34 @@ pytestmark = pytest.mark.django_db
 
 
 def test_create_company_succeeds_with_valid_data() -> None:
-    company = services.create_company(code="dh-1", legal_name="Desert Hawks Pvt Ltd")
+    company = services.create_company(
+        code="dh-1",
+        legal_name="Desert Hawks Pvt Ltd",
+        timezone="Asia/Karachi",
+        default_currency="PKR",
+        country_code="PK",
+    )
     assert company.pk is not None
     assert company.code == "DH-1"
     assert Company.objects.filter(pk=company.pk).exists()
 
 
 def test_create_company_rejects_duplicate_code() -> None:
-    services.create_company(code="DH-2", legal_name="Existing Co")
+    services.create_company(
+        code="DH-2",
+        legal_name="Existing Co",
+        timezone="Asia/Karachi",
+        default_currency="PKR",
+        country_code="PK",
+    )
     with pytest.raises(OrganizationValidationError):
-        services.create_company(code="DH-2", legal_name="Duplicate Co")
+        services.create_company(
+            code="DH-2",
+            legal_name="Duplicate Co",
+            timezone="Asia/Karachi",
+            default_currency="PKR",
+            country_code="PK",
+        )
 
 
 def test_update_company_changes_fields() -> None:

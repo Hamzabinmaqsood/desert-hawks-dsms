@@ -75,20 +75,20 @@ def create_company(
     *,
     code: str,
     legal_name: str,
+    timezone: str,
+    default_currency: str,
+    country_code: str,
     trade_name: str = "",
     registration_number: str | None = None,
     tax_number: str | None = None,
     email: str = "",
     phone: str = "",
     website: str = "",
-    timezone: str = "Asia/Karachi",
-    default_currency: str = "PKR",
     address_line_1: str = "",
     address_line_2: str = "",
     city_name: str = "",
     province_name: str = "",
     postal_code: str = "",
-    country_code: str = "PK",
     is_active: bool = True,
 ) -> Company:
     with transaction.atomic():
@@ -194,8 +194,8 @@ def create_city(
     code: str,
     name: str,
     province_or_state: str,
-    country_code: str = "PK",
-    timezone: str = "Asia/Karachi",
+    country_code: str | None = None,
+    timezone: str | None = None,
     is_active: bool = True,
 ) -> City:
     if not company.is_active:
@@ -211,8 +211,8 @@ def create_city(
             code=code,
             name=name,
             province_or_state=province_or_state,
-            country_code=country_code,
-            timezone=timezone,
+            country_code=country_code or company.country_code,
+            timezone=timezone or company.timezone,
             is_active=is_active,
         )
         _save(city)

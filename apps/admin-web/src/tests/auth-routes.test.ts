@@ -7,6 +7,10 @@ import {
   GET as getBranding,
   PATCH as updateBranding,
 } from "@/app/api/auth/company-branding/route";
+import {
+  GET as getBusinessSettings,
+  PATCH as updateBusinessSettings,
+} from "@/app/api/auth/company-business-settings/route";
 import { PUT as switchCompany } from "@/app/api/auth/company-context/route";
 import { GET as session } from "@/app/api/auth/session/route";
 import {
@@ -484,6 +488,79 @@ describe("authentication BFF routes", () => {
       }),
     );
     expect(response.status).toBe(400);
+    expect(backend).not.toHaveBeenCalled();
+  });
+
+  it("reads and normalizes selected Company business settings without browser authority", async () => {
+    const settings = {
+      default_currency: "AED",
+      timezone: "Asia/Dubai",
+      invoice_number_prefix: "B-INV",
+      receipt_number_prefix: "BREC",
+      credit_note_number_prefix: "BCN",
+      debit_note_number_prefix: "BDN",
+      can_manage: true,
+    };
+    const backend = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) => {
+        void _input;
+        void _init;
+        return json(settings);
+      },
+    );
+    vi.stubGlobal("fetch", backend);
+    const read = await getBusinessSettings(
+      request(
+        "/api/auth/company-business-settings",
+        {},
+        { [ACCESS_COOKIE]: "access", [REFRESH_COOKIE]: "refresh" },
+      ),
+    );
+    expect(read.status).toBe(200);
+    expect(await read.json()).toEqual(settings);
+    expect(String(backend.mock.calls[0]?.[0])).not.toContain("company_id");
+
+    const updated = await updateBusinessSettings(
+      request(
+        "/api/auth/company-business-settings",
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            default_currency: "aed",
+            timezone: "Asia/Dubai",
+            invoice_number_prefix: "b-inv",
+          }),
+        },
+        { [ACCESS_COOKIE]: "access", [REFRESH_COOKIE]: "refresh" },
+      ),
+    );
+    expect(updated.status).toBe(200);
+    const init = backend.mock.calls[1]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({
+      default_currency: "AED",
+      timezone: "Asia/Dubai",
+      invoice_number_prefix: "B-INV",
+    });
+  });
+
+  it("rejects invalid or owner-bearing business settings before forwarding", async () => {
+    const backend = vi.fn();
+    vi.stubGlobal("fetch", backend);
+    for (const payload of [
+      { company_id: companyB.id },
+      { default_currency: "US" },
+      { invoice_number_prefix: "../INV" },
+    ]) {
+      const response = await updateBusinessSettings(
+        request("/api/auth/company-business-settings", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }),
+      );
+      expect(response.status).toBe(400);
+    }
     expect(backend).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,7 @@ interface NavigationItem {
 const navigation: NavigationItem[] = [
   { label: "Dashboard", href: "/dashboard" },
   { label: "Branding", href: "/settings/branding" },
+  { label: "Business settings", href: "/settings/company" },
   {
     label: "Invoices",
     href: "/invoices",

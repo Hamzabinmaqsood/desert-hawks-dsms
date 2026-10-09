@@ -67,6 +67,11 @@ test("multi-company employee explicitly selects and switches active Company", as
   );
   await expect(page).toHaveTitle("Alpha Shield — DSMS");
 
+  await page.getByRole("link", { name: "Business settings" }).click();
+  await expect(page).toHaveURL(/\/settings\/company$/);
+  await expect(page.getByLabel("Default currency")).toHaveValue("USD");
+  await expect(page.getByLabel("Invoice prefix")).toHaveValue("AINV");
+
   await switcher.selectOption({ label: "DHB — Desert Hawks Bravo" });
   await expect(switcher).toHaveValue(COMPANY_B_ID);
   await expect(page).toHaveURL(/\/dashboard$/);
@@ -86,6 +91,10 @@ test("multi-company employee explicitly selects and switches active Company", as
     "Desert Hawks",
   );
   await expect(page).toHaveTitle("Bravo Guard — DSMS");
+  await page.getByRole("link", { name: "Business settings" }).click();
+  await expect(page.getByLabel("Default currency")).toHaveValue("AED");
+  await expect(page.getByLabel("Invoice prefix")).toHaveValue("BINV");
+  await expect(page.getByLabel("Timezone")).toHaveValue("Asia/Dubai");
 });
 
 test("employee reads an Invoice list and detail", async ({ page }) => {

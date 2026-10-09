@@ -13,6 +13,11 @@ from rest_framework import serializers
 
 from dsms.identity import access as identity_access
 from dsms.identity.models import User
+from dsms.organization.business_defaults import (
+    normalize_currency_code,
+    validate_currency_code,
+    validate_timezone_name,
+)
 from dsms.organization.enums import DepartmentScope
 from dsms.organization.models import (
     Branch,
@@ -111,6 +116,10 @@ class CompanyReadSerializer(serializers.ModelSerializer[Company]):
             "website",
             "timezone",
             "default_currency",
+            "invoice_number_prefix",
+            "receipt_number_prefix",
+            "credit_note_number_prefix",
+            "debit_note_number_prefix",
             "address_line_1",
             "address_line_2",
             "city_name",
@@ -149,7 +158,25 @@ class CompanyWriteSerializer(
     country_code = serializers.CharField(max_length=2, required=False)
 
     def validate_default_currency(self, value: str) -> str:
-        return value.strip().upper()
+        normalized = normalize_currency_code(value)
+        validate_currency_code(normalized)
+        return normalized
+
+    def validate_timezone(self, value: str) -> str:
+        normalized = value.strip()
+        validate_timezone_name(normalized)
+        return normalized
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        if self.instance is None:
+            missing = {
+                name: ["This field is required when creating a Company."]
+                for name in ("timezone", "default_currency", "country_code")
+                if name not in attrs
+            }
+            if missing:
+                raise serializers.ValidationError(missing)
+        return attrs
 
 
 # --------------------------------------------------------------------------
@@ -227,6 +254,11 @@ class CityWriteSerializer(
     province_or_state = serializers.CharField(max_length=150)
     country_code = serializers.CharField(max_length=2, required=False)
     timezone = serializers.CharField(max_length=64, required=False)
+
+    def validate_timezone(self, value: str) -> str:
+        normalized = value.strip()
+        validate_timezone_name(normalized)
+        return normalized
 
 
 # --------------------------------------------------------------------------

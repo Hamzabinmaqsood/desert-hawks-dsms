@@ -20,6 +20,8 @@ from .auth_serializers import (
     AccessScopeSummarySerializer,
     CompanyBrandingSerializer,
     CompanyBrandingUpdateSerializer,
+    CompanyBusinessSettingsSerializer,
+    CompanyBusinessSettingsUpdateSerializer,
     CompanyContextResponseSerializer,
     LoginSerializer,
     LogoutSerializer,
@@ -208,3 +210,38 @@ class CompanyBrandingView(views.APIView):
         fields = {field_map[name]: value for name, value in serializer.validated_data.items()}
         updated = organization_services.update_company(company=company, **fields)
         return Response(CompanyBrandingSerializer(updated, context={"request": request}).data)
+
+
+class CompanyBusinessSettingsView(CompanyBrandingView):
+    """Read or update defaults for the validated selected Company only."""
+
+    @extend_schema(tags=["Authentication"], responses=CompanyBusinessSettingsSerializer)
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        company = self._selected_company(request)
+        return Response(
+            CompanyBusinessSettingsSerializer(company, context={"request": request}).data
+        )
+
+    @extend_schema(
+        tags=["Authentication"],
+        request=CompanyBusinessSettingsUpdateSerializer,
+        responses=CompanyBusinessSettingsSerializer,
+    )
+    def patch(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        company = self._selected_company(request)
+        if not access.has_permission(
+            user=cast(User, request.user),
+            permission="organization.change_company",
+            company=company,
+        ):
+            raise PermissionDenied("Company business-settings permission is required.")
+        serializer = CompanyBusinessSettingsUpdateSerializer(
+            data=request.data,
+            partial=True,
+            context={"company": company},
+        )
+        serializer.is_valid(raise_exception=True)
+        updated = organization_services.update_company(company=company, **serializer.validated_data)
+        return Response(
+            CompanyBusinessSettingsSerializer(updated, context={"request": request}).data
+        )

@@ -35,7 +35,7 @@ class Employee(WorkforceBaseModel):
     employee_number = models.CharField(
         max_length=32,
         verbose_name="Employee number",
-        help_text="The official Desert Hawks employee identifier, e.g. DH-000001.",
+        help_text="The Company-assigned employee identifier, e.g. EMP-000001.",
     )
     user = models.OneToOneField(
         User,

@@ -50,6 +50,16 @@ export interface CompanyBranding {
   can_manage: boolean;
 }
 
+export interface CompanyBusinessSettings {
+  default_currency: string;
+  timezone: string;
+  invoice_number_prefix: string;
+  receipt_number_prefix: string;
+  credit_note_number_prefix: string;
+  debit_note_number_prefix: string;
+  can_manage: boolean;
+}
+
 export interface SelectedCompany extends SelectableCompany {
   branding?: CompanyBranding;
 }

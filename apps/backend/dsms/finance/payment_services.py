@@ -143,17 +143,20 @@ def request_payment_destination_change(
     provider_type: str,
     employee: Any = None,
     vendor: Any = None,
-    currency: str = "PKR",
+    currency: str | None = None,
 ) -> PaymentBeneficiaryProfile:
     raw = destination.strip()
     if len(raw) < 4 or (employee is None) == (vendor is None):
         raise ValidationError("A valid destination and exactly one beneficiary are required.")
+    owner = employee or vendor
+    if owner.company_id != company.id:
+        raise ValidationError("Beneficiary belongs to another company.")
     profile = PaymentBeneficiaryProfile.objects.create(
         company=company,
         employee=employee,
         vendor=vendor,
         provider_type=provider_type,
-        currency=currency,
+        currency=currency or company.default_currency,
         destination_encrypted=encrypt_payment_destination(raw),
         destination_masked="***" + raw[-4:],
         account_title=account_title.strip(),

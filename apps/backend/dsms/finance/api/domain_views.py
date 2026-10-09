@@ -16,6 +16,10 @@ from rest_framework.views import APIView
 
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.organization.business_defaults import (
+    normalize_currency_code,
+    validate_currency_code,
+)
 
 from .. import domain_selectors, domain_services
 from ..enums import ApprovalDocumentType, WorkflowStatus
@@ -202,6 +206,16 @@ class DomainCollectionView(FinanceAPIView):
         model, permission, ids = self._context(request, resource)
         serializer = serializer_for(model)(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if model is BankAccount:
+            currency = serializer.validated_data.get(
+                "currency", serializer.validated_data["company"].default_currency
+            )
+            currency = normalize_currency_code(currency)
+            try:
+                validate_currency_code(currency)
+            except DjangoValidationError as exc:
+                raise ValidationError({"currency": exc.messages}) from exc
+            serializer.validated_data["currency"] = currency
         if model is Vendor:
             vendor_account_error(
                 serializer.validated_data["company"],

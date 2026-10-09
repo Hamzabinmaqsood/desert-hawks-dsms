@@ -10,6 +10,10 @@ from django.utils import timezone
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
 from dsms.identity.models import User
+from dsms.organization.business_defaults import (
+    normalize_document_prefix,
+    validate_document_prefix,
+)
 from dsms.organization.models import Branch, Company, Department
 
 from .enums import FinanceEventType, JournalStatus, PeriodStatus
@@ -172,13 +176,34 @@ def _event(
 
 @transaction.atomic
 def next_document_number(*, company: Company, prefix: str, year: int) -> str:
-    normalized = prefix.strip().upper()
+    normalized = normalize_document_prefix(prefix)
+    validate_document_prefix(normalized)
+    # A new prefix/year has no sequence row to lock yet. Serializing on the
+    # owning Company makes first allocation collision-safe while preserving
+    # independent allocation between Companies.
+    Company.objects.select_for_update().only("pk").get(pk=company.pk)
     sequence, _ = DocumentSequence.objects.select_for_update().get_or_create(
         company=company, prefix=normalized, year=year
     )
     sequence.last_number += 1
     sequence.save(update_fields=["last_number"])
     return f"{normalized}-{year}-{sequence.last_number:06d}"
+
+
+COMPANY_DOCUMENT_PREFIX_FIELDS = {
+    "invoice": "invoice_number_prefix",
+    "receipt": "receipt_number_prefix",
+    "credit_note": "credit_note_number_prefix",
+    "debit_note": "debit_note_number_prefix",
+}
+
+
+def next_company_document_number(*, company: Company, family: str, year: int) -> str:
+    try:
+        field = COMPANY_DOCUMENT_PREFIX_FIELDS[family]
+    except KeyError as exc:
+        raise FinanceValidationError({"family": ["Unsupported Company document family."]}) from exc
+    return next_document_number(company=company, prefix=getattr(company, field), year=year)
 
 
 def _validate_period(

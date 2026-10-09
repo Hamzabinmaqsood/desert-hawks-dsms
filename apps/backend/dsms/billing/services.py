@@ -18,10 +18,11 @@ from dsms.finance.services import (
     approve_journal,
     create_journal,
     money,
-    next_document_number,
+    next_company_document_number,
     post_journal,
     submit_journal,
 )
+from dsms.organization.business_defaults import company_local_date
 
 from .api.security import consistent_queryset
 from .enums import (
@@ -237,7 +238,9 @@ def create_invoice(
         raise ValidationError({"contract": "Contract belongs to another company or client."})
     if service_period_start and service_period_end and service_period_end < service_period_start:
         raise ValidationError({"service_period_end": "Service period end precedes its start."})
-    number = next_document_number(company=profile.company, prefix="INV", year=invoice_date.year)
+    number = next_company_document_number(
+        company=profile.company, family="invoice", year=invoice_date.year
+    )
     invoice = ClientInvoice.objects.create(
         invoice_number=number,
         company=profile.company,
@@ -761,14 +764,15 @@ def create_credit_note(
         InvoiceStatus.DISPUTED,
     }:
         raise ValidationError("Credit notes require a valid issued invoice.")
+    note_date = company_local_date(source.company)
     note = ClientCreditNote.objects.create(
         company=source.company,
         client=source.client,
         invoice=source,
-        note_number=next_document_number(
-            company=source.company, prefix="CN", year=timezone.localdate().year
+        note_number=next_company_document_number(
+            company=source.company, family="credit_note", year=note_date.year
         ),
-        note_date=timezone.localdate(),
+        note_date=note_date,
         currency=source.currency,
         reason=reason.strip(),
         created_by=actor,
@@ -902,14 +906,15 @@ def create_debit_note(
             or invoice.currency != profile.currency
         ):
             raise ValidationError("Invoice belongs to another company, client, or currency.")
+    note_date = company_local_date(profile.company)
     note = ClientDebitNote.objects.create(
         company=profile.company,
         client=profile.client,
         invoice=invoice,
-        note_number=next_document_number(
-            company=profile.company, prefix="DN", year=timezone.localdate().year
+        note_number=next_company_document_number(
+            company=profile.company, family="debit_note", year=note_date.year
         ),
-        note_date=timezone.localdate(),
+        note_date=note_date,
         currency=profile.currency,
         reason=reason.strip(),
         created_by=actor,

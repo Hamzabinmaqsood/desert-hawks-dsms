@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models as django_models
 from django.db.models import Q
 from rest_framework import serializers
 
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.organization.business_defaults import (
+    normalize_currency_code,
+    validate_currency_code,
+    validate_timezone_name,
+)
 from dsms.organization.models import Company
 
 from .. import models
@@ -353,6 +359,27 @@ class TenantSafeContractSerializer(serializers.ModelSerializer[Any]):
             owner = attrs.get("company", getattr(instance, "company", None))
         company_id = company_id_for(owner)
         errors: dict[str, str] = {}
+        if (
+            model is models.ServiceContract
+            and instance is None
+            and "currency" not in attrs
+            and owner
+        ):
+            attrs["currency"] = owner.default_currency
+        if model is models.ServiceContract and "currency" in attrs:
+            attrs["currency"] = normalize_currency_code(attrs["currency"])
+            try:
+                validate_currency_code(attrs["currency"])
+            except DjangoValidationError as exc:
+                errors["currency"] = "; ".join(exc.messages)
+        if model is models.SecuritySite and instance is None and owner:
+            attrs.setdefault("country_code", owner.country_code)
+            attrs.setdefault("timezone", owner.timezone)
+        if model is models.SecuritySite and "timezone" in attrs:
+            try:
+                validate_timezone_name(attrs["timezone"])
+            except DjangoValidationError as exc:
+                errors["timezone"] = "; ".join(exc.messages)
         for field in model._meta.fields:  # type: ignore[attr-defined]
             remote = getattr(getattr(field, "remote_field", None), "model", None)
             if field.name == "company" or remote not in COMPANY_PATHS:

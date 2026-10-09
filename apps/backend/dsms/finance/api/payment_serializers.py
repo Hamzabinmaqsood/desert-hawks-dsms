@@ -2,6 +2,11 @@ from typing import Any
 
 from rest_framework import serializers
 
+from dsms.organization.business_defaults import (
+    normalize_currency_code,
+    validate_currency_code,
+)
+
 from ..payment_models import (
     PaymentBatch,
     PaymentBeneficiaryProfile,
@@ -13,6 +18,14 @@ from ..payment_models import (
 
 
 class PaymentProviderSerializer(serializers.ModelSerializer[PaymentProviderConfiguration]):
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        if self.instance is None and "currency" not in attrs:
+            attrs["currency"] = attrs["company"].default_currency
+        if "currency" in attrs:
+            attrs["currency"] = normalize_currency_code(attrs["currency"])
+            validate_currency_code(attrs["currency"])
+        return attrs
+
     class Meta:
         model = PaymentProviderConfiguration
         exclude = ("secret_reference",)
@@ -93,7 +106,12 @@ class DestinationRequestSerializer(serializers.Serializer[Any]):
     destination = serializers.CharField(write_only=True, trim_whitespace=True)
     account_title = serializers.CharField()
     provider_type = serializers.CharField()
-    currency = serializers.CharField(default="PKR", max_length=3)
+    currency = serializers.CharField(required=False, max_length=3)
+
+    def validate_currency(self, value: str) -> str:
+        normalized = normalize_currency_code(value)
+        validate_currency_code(normalized)
+        return normalized
 
 
 class ManualPaymentSuccessSerializer(serializers.Serializer[Any]):

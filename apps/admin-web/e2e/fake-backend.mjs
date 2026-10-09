@@ -36,6 +36,15 @@ const COMPANY_A = {
     accent_color: "#D6A84F",
     can_manage: false,
   },
+  business_settings: {
+    default_currency: "USD",
+    timezone: "America/New_York",
+    invoice_number_prefix: "AINV",
+    receipt_number_prefix: "AREC",
+    credit_note_number_prefix: "ACN",
+    debit_note_number_prefix: "ADN",
+    can_manage: false,
+  },
 };
 const COMPANY_B = {
   id: "00000000-0000-0000-0000-000000000003",
@@ -48,6 +57,15 @@ const COMPANY_B = {
     tagline: "Bravo operations",
     primary_color: "#243B6B",
     accent_color: "#4DB6AC",
+    can_manage: false,
+  },
+  business_settings: {
+    default_currency: "AED",
+    timezone: "Asia/Dubai",
+    invoice_number_prefix: "BINV",
+    receipt_number_prefix: "BREC",
+    credit_note_number_prefix: "BCN",
+    debit_note_number_prefix: "BDN",
     can_manage: false,
   },
 };
@@ -506,6 +524,15 @@ createServer(async (request, response) => {
     if (!context.selected_company)
       return json(response, 404, { detail: "Not found." });
     return json(response, 200, context.selected_company.branding);
+  }
+  if (
+    path === "/api/v1/auth/company-business-settings/" &&
+    request.method === "GET"
+  ) {
+    const context = contextBody(request, actor);
+    if (!context.selected_company)
+      return json(response, 404, { detail: "Not found." });
+    return json(response, 200, context.selected_company.business_settings);
   }
   if (path === "/api/v1/auth/me/") {
     return json(response, 200, actorBody(actor));

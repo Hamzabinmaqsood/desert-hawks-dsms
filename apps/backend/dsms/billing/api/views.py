@@ -6,7 +6,6 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Prefetch
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import decorators, mixins, permissions, response, serializers, status, viewsets
@@ -18,10 +17,11 @@ from rest_framework.views import APIView
 from dsms.finance.enums import AccountType
 from dsms.finance.models import Account
 from dsms.finance.operations_models import BankAccount
-from dsms.finance.services import next_document_number
+from dsms.finance.services import next_company_document_number
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission, RequiresPermission
+from dsms.organization.business_defaults import company_local_date
 
 from ..models import (
     BillingRule,
@@ -478,8 +478,10 @@ class ReceiptViewSet(NoDeleteViewSet):
             company=company,
         ):
             raise PermissionDenied
-        number = next_document_number(
-            company=company, prefix="RCPT", year=timezone.localdate().year
+        number = next_company_document_number(
+            company=company,
+            family="receipt",
+            year=company_local_date(company, serializer.validated_data["received_at"]).year,
         )
         serializer.save(received_by=self.request.user, receipt_number=number)
 

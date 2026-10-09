@@ -3,6 +3,7 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
+from ..business_defaults import validate_timezone_name
 from .base import CODE_VALIDATOR, OrganizationBaseModel, normalize_code
 from .company import Company
 from .region import Region
@@ -27,7 +28,12 @@ class City(OrganizationBaseModel):
     name = models.CharField(max_length=150, verbose_name="City name")
     province_or_state = models.CharField(max_length=150, verbose_name="Province or state")
     country_code = models.CharField(max_length=2, default="PK", verbose_name="Country code")
-    timezone = models.CharField(max_length=64, default="Asia/Karachi", verbose_name="Timezone")
+    timezone = models.CharField(
+        max_length=64,
+        default="Asia/Karachi",
+        validators=[validate_timezone_name],
+        verbose_name="Timezone",
+    )
 
     class Meta:
         ordering = ["company__code", "code"]
