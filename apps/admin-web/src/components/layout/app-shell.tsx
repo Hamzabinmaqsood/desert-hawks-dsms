@@ -1,22 +1,38 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, type CSSProperties, type ReactNode } from "react";
 
 import { CompanySwitcher } from "@/components/auth/company-switcher";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { Sidebar } from "@/components/layout/sidebar";
 import { useAuth } from "@/features/auth/auth-context";
+import { resolveCompanyBranding } from "@/lib/branding";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const session = useAuth();
   const name = [session.user.first_name, session.user.last_name]
     .filter(Boolean)
     .join(" ");
+  const selectedCompany = session.company_context.selected_company;
+  const branding = resolveCompanyBranding(selectedCompany);
+  const tenantStyle = {
+    "--tenant-brand": branding.primary_color,
+    "--tenant-accent": branding.accent_color,
+  } as CSSProperties;
+  useEffect(() => {
+    document.title = selectedCompany
+      ? `${branding.display_name} — DSMS`
+      : "Desert Hawks Digital Transformation System";
+    return () => {
+      document.title = "Desert Hawks Digital Transformation System";
+    };
+  }, [branding.display_name, selectedCompany]);
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={tenantStyle}>
       <Sidebar
         permissions={session.permissions}
         isSuperuser={session.user.is_superuser}
+        branding={branding}
       />
       <div className="app-workspace">
         <header className="topbar">

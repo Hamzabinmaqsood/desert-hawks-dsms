@@ -33,6 +33,10 @@ class CompanyAdmin(NoHardDeleteAdmin):
     fieldsets = (
         (None, {"fields": ("code", "legal_name", "trade_name", "is_active")}),
         (
+            "Branding",
+            {"fields": ("brand_tagline", "brand_primary_color", "brand_accent_color")},
+        ),
+        (
             "Registration",
             {"fields": ("registration_number", "tax_number")},
         ),

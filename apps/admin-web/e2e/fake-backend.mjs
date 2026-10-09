@@ -29,6 +29,13 @@ const COMPANY_A = {
   display_name: "Desert Hawks Alpha",
   legal_name: "Desert Hawks Alpha Limited",
   is_active: true,
+  branding: {
+    display_name: "Alpha Shield",
+    tagline: "Alpha operations",
+    primary_color: "#174D34",
+    accent_color: "#D6A84F",
+    can_manage: false,
+  },
 };
 const COMPANY_B = {
   id: "00000000-0000-0000-0000-000000000003",
@@ -36,6 +43,13 @@ const COMPANY_B = {
   display_name: "Desert Hawks Bravo",
   legal_name: "Desert Hawks Bravo Limited",
   is_active: true,
+  branding: {
+    display_name: "Bravo Guard",
+    tagline: "Bravo operations",
+    primary_color: "#243B6B",
+    accent_color: "#4DB6AC",
+    can_manage: false,
+  },
 };
 const companyContexts = new Map();
 
@@ -205,7 +219,13 @@ const contextBody = (request, actor) => {
     companies.find((company) => company.id === selectedId) ?? null;
   return {
     user: actorBody(actor),
-    companies,
+    companies: companies.map((company) => ({
+      id: company.id,
+      code: company.code,
+      display_name: company.display_name,
+      legal_name: company.legal_name,
+      is_active: company.is_active,
+    })),
     selected_company: selectedCompany,
     selection_required: companies.length > 0 && !selectedCompany,
   };
@@ -480,6 +500,12 @@ createServer(async (request, response) => {
     return json(response, 200, contextBody(syntheticRequest, actor), {
       "Set-Cookie": `sessionid=${sessionId}; Path=/; HttpOnly; SameSite=Lax`,
     });
+  }
+  if (path === "/api/v1/auth/company-branding/" && request.method === "GET") {
+    const context = contextBody(request, actor);
+    if (!context.selected_company)
+      return json(response, 404, { detail: "Not found." });
+    return json(response, 200, context.selected_company.branding);
   }
   if (path === "/api/v1/auth/me/") {
     return json(response, 200, actorBody(actor));

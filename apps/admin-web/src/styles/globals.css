@@ -42,6 +42,7 @@ select {
 }
 .button:focus-visible,
 input:focus-visible,
+select:focus-visible,
 a:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent) 65%, white);
   outline-offset: 2px;
@@ -166,12 +167,16 @@ a:focus-visible {
   align-items: center;
 }
 .app-shell {
+  --tenant-accent: var(--accent);
+  --tenant-brand: var(--brand);
+
   display: grid;
   grid-template-columns: 15rem 1fr;
   min-height: 100vh;
 }
 .sidebar {
   background: var(--brand-dark);
+  border-top: 0.35rem solid var(--tenant-accent);
   color: white;
   padding: 1.5rem 1rem;
 }
@@ -208,6 +213,7 @@ a:focus-visible {
   justify-content: space-between;
   min-height: 4.5rem;
   padding: 0.75rem 2rem;
+  box-shadow: inset 0 -0.2rem var(--tenant-brand);
 }
 .topbar-identity {
   display: grid;
@@ -283,6 +289,9 @@ a:focus-visible {
   gap: 0.55rem;
   padding: 1.25rem;
 }
+.summary-card {
+  border-top: 0.2rem solid var(--tenant-accent);
+}
 .summary-card span,
 .summary-card small {
   color: var(--muted);
@@ -294,6 +303,61 @@ a:focus-visible {
 .state-error {
   border-color: #e3baba;
   color: var(--danger);
+}
+.branding-readonly {
+  background: #f6f8f7;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+}
+.branding-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1.5fr) minmax(16rem, 1fr);
+}
+.branding-form,
+.branding-preview {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+}
+.branding-form {
+  display: grid;
+  gap: 1rem;
+}
+.branding-form .button {
+  justify-self: start;
+}
+.form-success {
+  background: #e8f4ec;
+  border-radius: 0.45rem;
+  color: #175738;
+  padding: 0.75rem;
+}
+.branding-preview {
+  align-content: start;
+  display: grid;
+  gap: 0.6rem;
+}
+.branding-preview-colors {
+  border-bottom-style: solid;
+  border-bottom-width: 0.7rem;
+  border-radius: 0.65rem;
+  height: 5rem;
+}
+.branding-preview small,
+.branding-preview span,
+.branding-preview p {
+  color: var(--muted);
+}
+.branding-preview strong {
+  font-size: 1.35rem;
+}
+.branding-preview p {
+  font-size: 0.85rem;
+  margin: 0.4rem 0 0;
 }
 .invoice-filters {
   align-items: end;
@@ -492,7 +556,8 @@ a:focus-visible {
     grid-template-columns: 1fr;
   }
   .invoice-filters,
-  .detail-columns {
+  .detail-columns,
+  .branding-layout {
     grid-template-columns: 1fr;
   }
   .filter-actions {

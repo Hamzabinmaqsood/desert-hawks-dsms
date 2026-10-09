@@ -42,9 +42,21 @@ export interface SelectableCompany {
   is_active: boolean;
 }
 
+export interface CompanyBranding {
+  display_name: string;
+  tagline: string;
+  primary_color: string;
+  accent_color: string;
+  can_manage: boolean;
+}
+
+export interface SelectedCompany extends SelectableCompany {
+  branding?: CompanyBranding;
+}
+
 export interface CompanyContext {
   companies: SelectableCompany[];
-  selected_company: SelectableCompany | null;
+  selected_company: SelectedCompany | null;
   selection_required: boolean;
 }
 

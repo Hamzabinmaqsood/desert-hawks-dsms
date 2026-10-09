@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .auth_views import (
+    CompanyBrandingView,
     CompanyContextView,
     LoginView,
     LogoutView,
@@ -19,6 +20,7 @@ urlpatterns = [
     path("verify/", VerifyView.as_view(), name="verify"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("company-context/", CompanyContextView.as_view(), name="company-context"),
+    path("company-branding/", CompanyBrandingView.as_view(), name="company-branding"),
     path("me/", MeView.as_view(), name="me"),
     path("me/permissions/", MePermissionsView.as_view(), name="me-permissions"),
     path("me/access-scopes/", MeAccessScopesView.as_view(), name="me-access-scopes"),

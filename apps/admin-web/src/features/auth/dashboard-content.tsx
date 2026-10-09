@@ -2,16 +2,23 @@
 
 import { PageHeader } from "@/components/layout/page-header";
 import { useAuth } from "@/features/auth/auth-context";
+import { resolveCompanyBranding } from "@/lib/branding";
 
 export function DashboardContent() {
-  const { user, permissions, scopes } = useAuth();
+  const { user, permissions, scopes, company_context: context } = useAuth();
+  const branding = resolveCompanyBranding(context.selected_company);
   return (
     <>
       <PageHeader
-        title={`Welcome, ${user.first_name || user.email}`}
-        description="Your secure administration workspace is ready."
+        title={`${branding.display_name} workspace`}
+        description={branding.tagline}
       />
       <section className="dashboard-grid" aria-label="Session overview">
+        <article className="summary-card">
+          <span>Signed in as</span>
+          <strong>{user.first_name || user.email}</strong>
+          <small>Your secure administration workspace is ready.</small>
+        </article>
         <article className="summary-card">
           <span>Account</span>
           <strong>{user.email}</strong>

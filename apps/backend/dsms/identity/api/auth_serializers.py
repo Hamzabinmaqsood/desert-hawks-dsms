@@ -1,10 +1,11 @@
-from typing import Any
+from typing import Any, cast
 
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from dsms.identity import access
 from dsms.organization.models import Company
 
 from .serializers import UserReadSerializer
@@ -87,12 +88,88 @@ class CompanyContextCompanySerializer(serializers.ModelSerializer[Company]):
         return obj.trade_name or obj.legal_name
 
 
+class CompanyBrandingSerializer(serializers.Serializer[Any]):
+    display_name = serializers.SerializerMethodField()
+    tagline = serializers.SerializerMethodField()
+    primary_color = serializers.SerializerMethodField()
+    accent_color = serializers.SerializerMethodField()
+    can_manage = serializers.SerializerMethodField()
+
+    def get_display_name(self, obj: Company) -> str:
+        return obj.trade_name or obj.legal_name
+
+    def get_tagline(self, obj: Company) -> str:
+        return obj.brand_tagline or "Digital Transformation System"
+
+    def get_primary_color(self, obj: Company) -> str:
+        return obj.brand_primary_color or "#174D34"
+
+    def get_accent_color(self, obj: Company) -> str:
+        return obj.brand_accent_color or "#D6A84F"
+
+    def get_can_manage(self, obj: Company) -> bool:
+        request = self.context.get("request")
+        return bool(
+            request
+            and access.has_permission(
+                user=request.user,
+                permission="organization.change_company",
+                company=obj,
+            )
+        )
+
+
+class SelectedCompanyContextSerializer(CompanyContextCompanySerializer):
+    branding = CompanyBrandingSerializer(source="*", read_only=True)
+
+    class Meta:
+        model = Company
+        fields = ("id", "code", "display_name", "legal_name", "is_active", "branding")
+        read_only_fields = fields
+
+
 class CompanyContextResponseSerializer(serializers.Serializer[Any]):
     user = UserReadSerializer(read_only=True)
     companies = CompanyContextCompanySerializer(many=True, read_only=True)
-    selected_company = CompanyContextCompanySerializer(read_only=True, allow_null=True)
+    selected_company = SelectedCompanyContextSerializer(read_only=True, allow_null=True)
     selection_required = serializers.BooleanField(read_only=True)
 
 
 class SelectCompanySerializer(serializers.Serializer[Any]):
     company_id = serializers.UUIDField()
+
+
+class CompanyBrandingUpdateSerializer(serializers.Serializer[Any]):
+    display_name = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, trim_whitespace=True
+    )
+    tagline = serializers.CharField(
+        max_length=160, required=False, allow_blank=True, trim_whitespace=True
+    )
+    primary_color = serializers.RegexField(
+        regex=r"^#[0-9A-Fa-f]{6}$",
+        required=False,
+        allow_blank=True,
+        error_messages={"invalid": "Enter a color in #RRGGBB format."},
+    )
+    accent_color = serializers.RegexField(
+        regex=r"^#[0-9A-Fa-f]{6}$",
+        required=False,
+        allow_blank=True,
+        error_messages={"invalid": "Enter a color in #RRGGBB format."},
+    )
+
+    def to_internal_value(self, data: Any) -> dict[str, Any]:
+        if isinstance(data, dict):
+            unsupported = sorted(set(data) - set(self.fields))
+            if unsupported:
+                raise serializers.ValidationError(
+                    {name: ["This field is not supported."] for name in unsupported}
+                )
+        return cast(dict[str, Any], super().to_internal_value(data))
+
+    def validate_primary_color(self, value: str) -> str:
+        return value.upper()
+
+    def validate_accent_color(self, value: str) -> str:
+        return value.upper()

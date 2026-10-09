@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { canAny } from "@/lib/auth/permissions";
+import type { CompanyBranding } from "@/lib/auth/types";
 
 interface NavigationItem {
   label: string;
@@ -14,6 +15,7 @@ interface NavigationItem {
 
 const navigation: NavigationItem[] = [
   { label: "Dashboard", href: "/dashboard" },
+  { label: "Branding", href: "/settings/branding" },
   {
     label: "Invoices",
     href: "/invoices",
@@ -44,9 +46,11 @@ const navigation: NavigationItem[] = [
 export function Sidebar({
   permissions,
   isSuperuser,
+  branding,
 }: {
   permissions: string[];
   isSuperuser: boolean;
+  branding: CompanyBranding;
 }) {
   const pathname = usePathname();
   const visible = navigation.filter(
@@ -58,9 +62,9 @@ export function Sidebar({
       <div className="brand">
         <BrandLogo className="brand-logo-shell" />
         <span>
-          Desert Hawks
+          {branding.display_name}
           <br />
-          <small>Digital Transformation System</small>
+          <small>{branding.tagline}</small>
         </span>
       </div>
       <nav>

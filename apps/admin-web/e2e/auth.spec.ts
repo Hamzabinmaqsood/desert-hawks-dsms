@@ -33,7 +33,7 @@ test("employee signs in, uses the protected shell, and signs out", async ({
     page.getByRole("img", { name: "Desert Hawks official logo" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Welcome, Test" }),
+    page.getByRole("heading", { name: "Alpha Shield workspace" }),
   ).toBeVisible();
   await expect(page.getByText("employee@example.test").first()).toBeVisible();
 
@@ -56,8 +56,12 @@ test("multi-company employee explicitly selects and switches active Company", as
   await switcher.selectOption({ label: "DHA — Desert Hawks Alpha" });
   await expect(switcher).toHaveValue(COMPANY_A_ID);
   await expect(
-    page.getByRole("heading", { name: "Welcome, Multi" }),
+    page.getByRole("heading", { name: "Alpha Shield workspace" }),
   ).toBeVisible();
+  await expect(page.locator(".sidebar .brand")).toContainText(
+    "Alpha operations",
+  );
+  await expect(page).toHaveTitle("Alpha Shield — DSMS");
 
   await switcher.selectOption({ label: "DHB — Desert Hawks Bravo" });
   await expect(switcher).toHaveValue(COMPANY_B_ID);
@@ -65,6 +69,16 @@ test("multi-company employee explicitly selects and switches active Company", as
   await expect(
     page.getByText("multicompany@example.test").first(),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Bravo Guard workspace" }),
+  ).toBeVisible();
+  await expect(page.locator(".sidebar .brand")).toContainText(
+    "Bravo operations",
+  );
+  await expect(page.locator(".sidebar .brand")).not.toContainText(
+    "Alpha Shield",
+  );
+  await expect(page).toHaveTitle("Bravo Guard — DSMS");
 });
 
 test("employee reads an Invoice list and detail", async ({ page }) => {

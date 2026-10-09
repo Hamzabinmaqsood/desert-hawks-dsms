@@ -4,7 +4,7 @@ from typing import Any, cast
 
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, permissions, status, views
-from rest_framework.exceptions import APIException
+from rest_framework.exceptions import APIException, NotFound, PermissionDenied
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -14,9 +14,12 @@ from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
 from dsms.identity import access, company_context, selectors
 from dsms.identity.models import User
+from dsms.organization import services as organization_services
 
 from .auth_serializers import (
     AccessScopeSummarySerializer,
+    CompanyBrandingSerializer,
+    CompanyBrandingUpdateSerializer,
     CompanyContextResponseSerializer,
     LoginSerializer,
     LogoutSerializer,
@@ -146,7 +149,9 @@ class CompanyContextView(views.APIView):
     @extend_schema(tags=["Authentication"], responses=CompanyContextResponseSerializer)
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         payload = company_context.build_company_context(request)
-        return Response(CompanyContextResponseSerializer(payload).data)
+        return Response(
+            CompanyContextResponseSerializer(payload, context={"request": request}).data
+        )
 
     @extend_schema(
         tags=["Authentication"],
@@ -158,4 +163,48 @@ class CompanyContextView(views.APIView):
         serializer.is_valid(raise_exception=True)
         company_context.select_company(request, serializer.validated_data["company_id"])
         payload = company_context.build_company_context(request)
-        return Response(CompanyContextResponseSerializer(payload).data)
+        return Response(
+            CompanyContextResponseSerializer(payload, context={"request": request}).data
+        )
+
+
+class CompanyBrandingView(views.APIView):
+    """Read or update branding for the validated selected Company only."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _selected_company(self, request: Request) -> Any:
+        company = company_context.build_company_context(request)["selected_company"]
+        if company is None:
+            raise NotFound("No active Company context is selected.")
+        return company
+
+    @extend_schema(tags=["Authentication"], responses=CompanyBrandingSerializer)
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        company = self._selected_company(request)
+        return Response(CompanyBrandingSerializer(company, context={"request": request}).data)
+
+    @extend_schema(
+        tags=["Authentication"],
+        request=CompanyBrandingUpdateSerializer,
+        responses=CompanyBrandingSerializer,
+    )
+    def patch(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        company = self._selected_company(request)
+        if not access.has_permission(
+            user=cast(User, request.user),
+            permission="organization.change_company",
+            company=company,
+        ):
+            raise PermissionDenied("Company branding management permission is required.")
+        serializer = CompanyBrandingUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        field_map = {
+            "display_name": "trade_name",
+            "tagline": "brand_tagline",
+            "primary_color": "brand_primary_color",
+            "accent_color": "brand_accent_color",
+        }
+        fields = {field_map[name]: value for name, value in serializer.validated_data.items()}
+        updated = organization_services.update_company(company=company, **fields)
+        return Response(CompanyBrandingSerializer(updated, context={"request": request}).data)

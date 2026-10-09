@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { POST as login } from "@/app/api/auth/login/route";
 import { POST as logout } from "@/app/api/auth/logout/route";
+import {
+  GET as getBranding,
+  PATCH as updateBranding,
+} from "@/app/api/auth/company-branding/route";
 import { PUT as switchCompany } from "@/app/api/auth/company-context/route";
 import { GET as session } from "@/app/api/auth/session/route";
 import {
@@ -385,5 +389,101 @@ describe("authentication BFF routes", () => {
       message: "Company is unavailable.",
     });
     expect(response.cookies.get(COMPANY_CONTEXT_COOKIE)).toBeUndefined();
+  });
+
+  it("reads branding from server-selected context without a Company UUID", async () => {
+    const branding = {
+      display_name: "Alpha Shield",
+      tagline: "Always ready",
+      primary_color: "#123456",
+      accent_color: "#ABCDEF",
+      can_manage: false,
+    };
+    const backend = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) => {
+        void _input;
+        void _init;
+        return json(branding);
+      },
+    );
+    vi.stubGlobal("fetch", backend);
+    const response = await getBranding(
+      request(
+        "/api/auth/company-branding",
+        {},
+        { [ACCESS_COOKIE]: "access", [REFRESH_COOKIE]: "refresh" },
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(branding);
+    expect(String(backend.mock.calls[0]?.[0])).toMatch(
+      /auth\/company-branding\/$/,
+    );
+    expect(String(backend.mock.calls[0]?.[0])).not.toContain("company_id");
+  });
+
+  it("normalizes safe branding updates and rejects browser Company authority", async () => {
+    const backend = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) => {
+        void _input;
+        void _init;
+        return json({
+          display_name: "Alpha Shield",
+          tagline: "Always ready",
+          primary_color: "#A1B2C3",
+          accent_color: "#D4E5F6",
+          can_manage: true,
+        });
+      },
+    );
+    vi.stubGlobal("fetch", backend);
+    const response = await updateBranding(
+      request(
+        "/api/auth/company-branding",
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            display_name: " Alpha Shield ",
+            tagline: " Always ready ",
+            primary_color: "#a1b2c3",
+            accent_color: "#d4e5f6",
+          }),
+        },
+        { [ACCESS_COOKIE]: "access", [REFRESH_COOKIE]: "refresh" },
+      ),
+    );
+    expect(response.status).toBe(200);
+    const init = backend.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({
+      display_name: "Alpha Shield",
+      tagline: "Always ready",
+      primary_color: "#A1B2C3",
+      accent_color: "#D4E5F6",
+    });
+
+    const unsupported = await updateBranding(
+      request("/api/auth/company-branding", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company_id: companyB.id }),
+      }),
+    );
+    expect(unsupported.status).toBe(400);
+    expect(backend).toHaveBeenCalledOnce();
+  });
+
+  it("rejects CSS injection before forwarding branding updates", async () => {
+    const backend = vi.fn();
+    vi.stubGlobal("fetch", backend);
+    const response = await updateBranding(
+      request("/api/auth/company-branding", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ primary_color: "url(https://attacker.test)" }),
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(backend).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,14 @@
 from typing import Any
 
+from django.core.validators import RegexValidator
 from django.db import models
 
 from .base import CODE_VALIDATOR, OrganizationBaseModel, normalize_code
+
+BRAND_COLOR_VALIDATOR = RegexValidator(
+    regex=r"^#[0-9A-Fa-f]{6}$",
+    message="Enter a color in #RRGGBB format.",
+)
 
 
 class Company(OrganizationBaseModel):
@@ -16,6 +22,21 @@ class Company(OrganizationBaseModel):
     )
     legal_name = models.CharField(max_length=255, verbose_name="Legal name")
     trade_name = models.CharField(max_length=255, blank=True, verbose_name="Trade name")
+    brand_tagline = models.CharField(max_length=160, blank=True, verbose_name="Brand tagline")
+    brand_primary_color = models.CharField(
+        max_length=7,
+        blank=True,
+        validators=[BRAND_COLOR_VALIDATOR],
+        verbose_name="Primary brand color",
+        help_text="Optional hexadecimal color in #RRGGBB format.",
+    )
+    brand_accent_color = models.CharField(
+        max_length=7,
+        blank=True,
+        validators=[BRAND_COLOR_VALIDATOR],
+        verbose_name="Accent brand color",
+        help_text="Optional hexadecimal color in #RRGGBB format.",
+    )
     registration_number = models.CharField(
         max_length=100,
         null=True,
@@ -59,6 +80,9 @@ class Company(OrganizationBaseModel):
         CODE_VALIDATOR(self.code)
         self.legal_name = self.legal_name.strip()
         self.trade_name = self.trade_name.strip()
+        self.brand_tagline = self.brand_tagline.strip()
+        self.brand_primary_color = self.brand_primary_color.strip().upper()
+        self.brand_accent_color = self.brand_accent_color.strip().upper()
         self.country_code = self.country_code.strip().upper()
         self.default_currency = self.default_currency.strip().upper()
         if self.registration_number is not None:
