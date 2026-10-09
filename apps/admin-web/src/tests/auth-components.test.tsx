@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LoginForm } from "@/components/auth/login-form";
 import { AppShell } from "@/components/layout/app-shell";
-import LoginPage from "@/app/(auth)/login/page";
+import LoginPage, { metadata as loginMetadata } from "@/app/(auth)/login/page";
+import { metadata as rootMetadata } from "@/app/layout";
 import { AuthProvider } from "@/features/auth/auth-context";
 import type { SessionData } from "@/lib/auth/types";
 
@@ -71,17 +72,15 @@ describe("authentication components", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => cleanup());
 
-  it("renders the official logo and product identity on the login page", () => {
+  it("renders neutral platform identity on the login page", () => {
     render(<LoginPage />);
-    const logo = screen.getByRole("img", {
-      name: "Desert Hawks official logo",
-    });
     expect(
-      new URL(logo.getAttribute("src")!, "http://admin.test").searchParams.get(
-        "url",
-      ),
-    ).toBe("/brand/desert-hawks-logo.png");
-    expect(screen.getByText("Digital Transformation System")).toBeTruthy();
+      screen.getByRole("img", { name: "DSMS platform mark" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Security Management Platform")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("Desert Hawks");
+    expect(loginMetadata.title).toBe("Sign in | DSMS");
+    expect(rootMetadata.title).toBe("DSMS — Security Management Platform");
   });
 
   it("renders an accessible login form and disables it while submitting", async () => {
@@ -158,14 +157,9 @@ describe("authentication components", () => {
     expect(screen.getByText("Test Employee")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();
     expect(screen.getByText("Protected content")).toBeTruthy();
-    const logo = screen.getByRole("img", {
-      name: "Desert Hawks official logo",
-    });
     expect(
-      new URL(logo.getAttribute("src")!, "http://admin.test").searchParams.get(
-        "url",
-      ),
-    ).toBe("/brand/desert-hawks-logo.png");
+      screen.getByRole("img", { name: "DSMS platform mark" }),
+    ).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Invoices" })).toBeNull();
     expect(
       (screen.getByLabelText("Active Company") as HTMLSelectElement).value,

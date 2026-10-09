@@ -6,12 +6,10 @@ class CommonConfig(AppConfig):
     name = "dsms.common"
 
     def ready(self) -> None:
-        # Django Admin is an internal, staff-only console for this deployment,
-        # so it carries the Desert Hawks identity rather than the stock Django
-        # labels. Applied at app load rather than in the URLconf so the
-        # branding does not depend on URL resolution having happened first.
+        # Django Admin is a global platform surface, not selected-Company UX.
+        # Keep its identity neutral and independent from tenant session state.
         from django.contrib import admin
 
-        admin.site.site_header = "Desert Hawks Administration"
-        admin.site.site_title = "Desert Hawks Admin"
-        admin.site.index_title = "Digital Transformation System"
+        admin.site.site_header = "DSMS Administration"
+        admin.site.site_title = "DSMS Admin"
+        admin.site.index_title = "Security Management Platform"

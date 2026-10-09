@@ -1,1 +1,1 @@
-"""Desert Hawks DSMS domain applications."""
+"""DSMS domain applications."""

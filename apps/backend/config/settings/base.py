@@ -172,7 +172,7 @@ REST_FRAMEWORK = {
     },
 }
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Desert Hawks DSMS API",
+    "TITLE": "DSMS API",
     "VERSION": "v1",
     "ENUM_NAME_OVERRIDES": {
         "PaymentBeneficiaryStatusEnum": "dsms.finance.payment_models.BeneficiaryStatus.choices",

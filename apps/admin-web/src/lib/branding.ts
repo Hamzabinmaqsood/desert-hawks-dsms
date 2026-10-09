@@ -1,7 +1,7 @@
 import type { CompanyBranding, SelectedCompany } from "@/lib/auth/types";
 
 export const DEFAULT_BRANDING: CompanyBranding = {
-  display_name: "Desert Hawks",
+  display_name: "DSMS",
   tagline: "Digital Transformation System",
   primary_color: "#174D34",
   accent_color: "#D6A84F",

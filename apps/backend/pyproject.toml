@@ -1,7 +1,7 @@
 [project]
 name = "desert-hawks-dsms-backend"
 version = "0.1.0"
-description = "Desert Hawks DSMS backend"
+description = "DSMS security management platform backend"
 requires-python = ">=3.13,<3.14"
 dependencies = [
   "celery>=5.4,<6",

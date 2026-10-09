@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { LoginForm } from "@/components/auth/login-form";
 import { BrandLogo } from "@/components/brand/brand-logo";
 
-export const metadata: Metadata = { title: "Sign in | Desert Hawks DSMS" };
+export const metadata: Metadata = { title: "Sign in | DSMS" };
 
 export default function LoginPage() {
   return (
@@ -12,9 +12,9 @@ export default function LoginPage() {
         <div className="brand brand-login">
           <BrandLogo className="brand-logo-login" priority />
           <span>
-            Desert Hawks
+            DSMS
             <br />
-            <small>Digital Transformation System</small>
+            <small>Security Management Platform</small>
           </span>
         </div>
         <h1 id="login-title">Welcome back</h1>

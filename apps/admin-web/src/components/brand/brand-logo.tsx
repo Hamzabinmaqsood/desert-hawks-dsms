@@ -1,20 +1,16 @@
-import Image from "next/image";
-
 export function BrandLogo({
   className = "",
-  priority = false,
 }: {
   className?: string;
   priority?: boolean;
 }) {
   return (
-    <Image
+    <span
+      aria-label="DSMS platform mark"
       className={`brand-logo ${className}`.trim()}
-      src="/brand/desert-hawks-logo.png"
-      alt="Desert Hawks official logo"
-      width={1028}
-      height={1070}
-      priority={priority}
-    />
+      role="img"
+    >
+      DSMS
+    </span>
   );
 }

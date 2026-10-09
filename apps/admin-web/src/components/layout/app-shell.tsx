@@ -22,9 +22,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.title = selectedCompany
       ? `${branding.display_name} — DSMS`
-      : "Desert Hawks Digital Transformation System";
+      : "DSMS — Security Management Platform";
     return () => {
-      document.title = "Desert Hawks Digital Transformation System";
+      document.title = "DSMS — Security Management Platform";
     };
   }, [branding.display_name, selectedCompany]);
   return (

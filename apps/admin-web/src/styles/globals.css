@@ -147,17 +147,27 @@ a:focus-visible {
   text-transform: uppercase;
 }
 .brand-logo {
+  align-items: center;
+  background: var(--brand);
+  border: 2px solid var(--accent);
+  border-radius: 0.7rem;
+  color: white;
   display: block;
   flex: 0 0 auto;
-  height: auto;
-  object-fit: contain;
+  font-size: 0.72rem;
+  font-weight: 900;
+  justify-content: center;
+  letter-spacing: 0.08em;
 }
 .brand-logo-shell {
-  max-height: 3.5rem;
+  display: flex;
+  height: 3.35rem;
   width: 3.35rem;
 }
 .brand-logo-login {
-  max-height: 6.5rem;
+  display: flex;
+  font-size: 1.05rem;
+  height: 5.5rem;
   width: 6.25rem;
 }
 .brand-login small {

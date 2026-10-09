@@ -112,14 +112,45 @@ def _post_journal(
 
 def _pdf_bytes(invoice: ClientInvoice) -> bytes:
     """Create a deterministic private PDF snapshot without external network/rendering."""
+    company = invoice.company
+    company_display_name = company.trade_name or company.legal_name
     lines = [
-        "DESERT HAWKS SECURITY SERVICES",
-        f"INVOICE {invoice.invoice_number}",
-        f"Invoice date: {invoice.invoice_date}    Due date: {invoice.due_date}",
-        f"Bill to: {invoice.billing_name_snapshot}",
-        invoice.billing_address_snapshot.replace("\n", " "),
-        f"Currency: {invoice.currency}",
+        company_display_name,
     ]
+    if company.legal_name != company_display_name:
+        lines.append(f"Legal name: {company.legal_name}")
+    if company.brand_tagline:
+        lines.append(company.brand_tagline)
+    if company.registration_number:
+        lines.append(f"Registration: {company.registration_number}")
+    if company.tax_number:
+        lines.append(f"Tax number: {company.tax_number}")
+    address = ", ".join(
+        part
+        for part in (
+            company.address_line_1,
+            company.address_line_2,
+            company.city_name,
+            company.province_name,
+            company.postal_code,
+            company.country_code,
+        )
+        if part
+    )
+    if address:
+        lines.append(address)
+    contact = " | ".join(part for part in (company.email, company.phone, company.website) if part)
+    if contact:
+        lines.append(contact)
+    lines.extend(
+        [
+            f"INVOICE {invoice.invoice_number}",
+            f"Invoice date: {invoice.invoice_date}    Due date: {invoice.due_date}",
+            f"Bill to: {invoice.billing_name_snapshot}",
+            invoice.billing_address_snapshot.replace("\n", " "),
+            f"Currency: {invoice.currency}",
+        ]
+    )
     for line in invoice.lines.order_by("line_number"):
         lines.append(
             f"{line.line_number}. {line.description} | "

@@ -26,7 +26,7 @@ from .models import (
 
 def activate_client(*, client: Client) -> Client:
     if not client.company.is_active:
-        raise ContractValidationError("An inactive Desert Hawks company cannot activate clients.")
+        raise ContractValidationError("An inactive Company cannot activate clients.")
     client.status = ClientStatus.ACTIVE
     client.save(update_fields=["status", "updated_at"])
     return client

@@ -21,8 +21,9 @@ test("employee signs in, uses the protected shell, and signs out", async ({
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/login$/);
   await expect(
-    page.getByRole("img", { name: "Desert Hawks official logo" }),
+    page.getByRole("img", { name: "DSMS platform mark" }),
   ).toBeVisible();
+  await expect(page.locator(".brand-login")).not.toContainText("Desert Hawks");
 
   await page.getByLabel("Work email").fill("employee@example.test");
   await page.getByLabel("Password").fill(randomUUID());
@@ -30,7 +31,7 @@ test("employee signs in, uses the protected shell, and signs out", async ({
 
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(
-    page.getByRole("img", { name: "Desert Hawks official logo" }),
+    page.getByRole("img", { name: "DSMS platform mark" }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Alpha Shield workspace" }),
@@ -61,6 +62,9 @@ test("multi-company employee explicitly selects and switches active Company", as
   await expect(page.locator(".sidebar .brand")).toContainText(
     "Alpha operations",
   );
+  await expect(page.locator(".sidebar .brand")).not.toContainText(
+    "Desert Hawks",
+  );
   await expect(page).toHaveTitle("Alpha Shield — DSMS");
 
   await switcher.selectOption({ label: "DHB — Desert Hawks Bravo" });
@@ -77,6 +81,9 @@ test("multi-company employee explicitly selects and switches active Company", as
   );
   await expect(page.locator(".sidebar .brand")).not.toContainText(
     "Alpha Shield",
+  );
+  await expect(page.locator(".sidebar .brand")).not.toContainText(
+    "Desert Hawks",
   );
   await expect(page).toHaveTitle("Bravo Guard — DSMS");
 });
