@@ -3,11 +3,13 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from django.contrib.auth.models import Permission
 
 from dsms.audit.models import AuditEvent
 from dsms.finance.models import DocumentSequence
 from dsms.identity.enums import AccessScopeType
 from dsms.identity.models import Role, User, UserRoleAssignment
+from dsms.identity.platform_access import PROVISION_TENANT
 from dsms.organization.models import Company, TenantProvisioningRequest, TenantProvisioningStatus
 from dsms.organization.provisioning import (
     InitialAdminData,
@@ -63,7 +65,14 @@ def request_data(
 
 
 def platform_actor() -> User:
-    return UserFactory.create(is_staff=True, is_superuser=True)
+    actor = UserFactory.create(is_staff=False, is_superuser=False)
+    actor.user_permissions.add(
+        Permission.objects.get(
+            content_type__app_label="organization",
+            codename=PROVISION_TENANT.split(".", maxsplit=1)[1],
+        )
+    )
+    return actor
 
 
 def test_provision_company_creates_minimal_configured_tenant_and_admin_access() -> None:

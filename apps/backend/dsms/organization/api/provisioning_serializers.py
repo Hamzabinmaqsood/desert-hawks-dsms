@@ -97,3 +97,22 @@ class TenantProvisioningResultSerializer(serializers.ModelSerializer[TenantProvi
             "updated_at",
         ]
         read_only_fields = fields
+
+
+class PlatformTenantDirectorySerializer(serializers.ModelSerializer[Company]):
+    """Allowlisted platform metadata; never nests tenant business resources."""
+
+    class Meta:
+        model = Company
+        fields = [
+            "id",
+            "code",
+            "legal_name",
+            "trade_name",
+            "is_active",
+            "country_code",
+            "timezone",
+            "default_currency",
+            "created_at",
+        ]
+        read_only_fields = fields

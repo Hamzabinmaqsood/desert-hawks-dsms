@@ -21,7 +21,7 @@ from dsms.audit.models import AuditCategory
 from dsms.audit.services import record_audit_event
 from dsms.organization.models import Branch, Company, Department, OperationalZone, Region
 
-from . import access
+from . import access, platform_access
 from .enums import AccessScopeType
 from .exceptions import (
     DuplicateAssignmentError,
@@ -381,6 +381,81 @@ def assign_role(
             metadata_safe={"role_code": role.code, "scope_type": scope_type},
         )
     return assignment
+
+
+def assign_provisioned_tenant_roles(
+    *,
+    actor: User,
+    user: User,
+    company: Company,
+    roles: Iterable[Role],
+) -> list[UserRoleAssignment]:
+    """Assign the fixed initial-admin bundle during authorized provisioning.
+
+    This is intentionally narrower than generic GLOBAL role management. It
+    accepts only active global system templates from the established tenant
+    administrator bundle and always creates Company-scoped assignments for
+    the newly provisioned Company.
+    """
+
+    if not platform_access.has_platform_capability(actor, platform_access.PROVISION_TENANT):
+        raise ScopeAuthorizationError("Platform tenant-provisioning permission is required.")
+    if not user.is_active:
+        raise InactiveRelatedRecordError("Cannot assign roles to an inactive user.")
+    if not company.is_active:
+        raise InactiveRelatedRecordError("Cannot assign roles under an inactive company.")
+
+    role_list = list(roles)
+    allowed_codes = {"ORGANIZATION_ADMIN", "ACCESS_ADMIN"}
+    if {role.code for role in role_list} != allowed_codes:
+        raise IdentityValidationError(
+            {"roles": ["The initial tenant-administrator role bundle is invalid."]}
+        )
+    if any(
+        not role.is_active or not role.is_system or role.company_id is not None
+        for role in role_list
+    ):
+        raise InactiveRelatedRecordError(
+            "Provisioning requires active global system role templates."
+        )
+
+    assignments: list[UserRoleAssignment] = []
+    with transaction.atomic():
+        for role in role_list:
+            _guard_no_duplicate_assignment(
+                user=user,
+                role=role,
+                scope_type=AccessScopeType.COMPANY,
+                company=company,
+                region=None,
+                branch=None,
+                department=None,
+                operational_zone=None,
+            )
+            assignment = UserRoleAssignment(
+                user=user,
+                role=role,
+                scope_type=AccessScopeType.COMPANY,
+                company=company,
+                is_active=True,
+                created_by=actor,
+            )
+            _save(assignment)
+            record_audit_event(
+                action="ROLE_ASSIGNED",
+                category=AuditCategory.AUTHORIZATION,
+                summary="Initial tenant-administrator role assigned during provisioning.",
+                actor_user=actor,
+                company=company,
+                source_object=assignment,
+                metadata_safe={
+                    "role_code": role.code,
+                    "scope_type": AccessScopeType.COMPANY,
+                    "provisioning_bootstrap": True,
+                },
+            )
+            assignments.append(assignment)
+    return assignments
 
 
 def update_role_assignment(

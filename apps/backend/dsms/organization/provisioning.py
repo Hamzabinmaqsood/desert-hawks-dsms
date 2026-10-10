@@ -9,10 +9,10 @@ from django.db import IntegrityError, transaction
 
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
-from dsms.identity.enums import AccessScopeType
 from dsms.identity.exceptions import IdentityError, IdentityValidationError
 from dsms.identity.models import Role, User
-from dsms.identity.services import assign_role, create_user
+from dsms.identity.platform_access import PROVISION_TENANT, has_platform_capability
+from dsms.identity.services import assign_provisioned_tenant_roles, create_user
 
 from . import services as organization_services
 from .business_defaults import normalize_currency_code, normalize_document_prefix
@@ -106,9 +106,9 @@ def _request_fingerprint(request: ProvisionCompanyRequest) -> str:
 
 
 def _require_platform_actor(actor: User) -> None:
-    if not actor.is_authenticated or not actor.is_active or not actor.is_superuser:
+    if not has_platform_capability(actor, PROVISION_TENANT):
         raise TenantProvisioningAuthorizationError(
-            "Only an active platform superuser may provision a tenant."
+            "Platform tenant-provisioning permission is required."
         )
 
 
@@ -192,14 +192,12 @@ def _bootstrap_initial_admin(
     *, actor: User, user: User, company: Company, roles: list[Role]
 ) -> None:
     try:
-        for role in roles:
-            assign_role(
-                actor=actor,
-                user=user,
-                role=role,
-                scope_type=AccessScopeType.COMPANY,
-                company=company,
-            )
+        assign_provisioned_tenant_roles(
+            actor=actor,
+            user=user,
+            company=company,
+            roles=roles,
+        )
     except IdentityError as exc:
         raise TenantProvisioningValidationError({"initial_admin": {"roles": [str(exc)]}}) from exc
 

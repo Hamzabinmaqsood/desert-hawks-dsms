@@ -3,9 +3,11 @@ from threading import Barrier
 from uuid import UUID, uuid4
 
 import pytest
+from django.contrib.auth.models import Permission
 from django.db import close_old_connections
 
 from dsms.identity.models import Role, User, UserRoleAssignment
+from dsms.identity.platform_access import PROVISION_TENANT
 from dsms.organization.models import Company, TenantProvisioningRequest
 from dsms.organization.provisioning import (
     InitialAdminData,
@@ -24,6 +26,17 @@ def tenant_admin_roles() -> tuple[Role, Role]:
         RoleFactory.create(code="ORGANIZATION_ADMIN", is_system=True),
         RoleFactory.create(code="ACCESS_ADMIN", is_system=True),
     )
+
+
+def platform_actor() -> User:
+    actor = UserFactory.create(is_staff=False, is_superuser=False)
+    actor.user_permissions.add(
+        Permission.objects.get(
+            content_type__app_label="organization",
+            codename=PROVISION_TENANT.split(".", maxsplit=1)[1],
+        )
+    )
+    return actor
 
 
 def request_data(code: str) -> ProvisionCompanyRequest:
@@ -73,7 +86,7 @@ def concurrent_provision(
 
 def test_concurrent_duplicate_requests_resolve_to_one_tenant() -> None:
     tenant_admin_roles()
-    actor = UserFactory.create(is_staff=True, is_superuser=True)
+    actor = platform_actor()
     key = uuid4()
     request = request_data("ALPHA")
 
@@ -91,7 +104,7 @@ def test_concurrent_duplicate_requests_resolve_to_one_tenant() -> None:
 
 def test_concurrent_conflicting_payloads_yield_one_success_and_one_conflict() -> None:
     tenant_admin_roles()
-    actor = UserFactory.create(is_staff=True, is_superuser=True)
+    actor = platform_actor()
     key = uuid4()
 
     results = concurrent_provision(
@@ -108,7 +121,7 @@ def test_concurrent_conflicting_payloads_yield_one_success_and_one_conflict() ->
 
 def test_concurrent_distinct_requests_create_isolated_tenants() -> None:
     tenant_admin_roles()
-    actor = UserFactory.create(is_staff=True, is_superuser=True)
+    actor = platform_actor()
 
     results = concurrent_provision(
         actor.pk,

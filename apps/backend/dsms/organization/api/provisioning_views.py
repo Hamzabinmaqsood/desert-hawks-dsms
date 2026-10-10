@@ -10,7 +10,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from dsms.identity.models import User
-from dsms.organization.models import TenantProvisioningRequest
+from dsms.identity.platform_access import (
+    PROVISION_TENANT,
+    VIEW_PLATFORM_TENANT_DIRECTORY,
+    VIEW_TENANT_PROVISIONING,
+    has_platform_capability,
+)
+from dsms.organization.models import Company, TenantProvisioningRequest
 from dsms.organization.provisioning import (
     InitialAdminData,
     ProvisionCompanyRequest,
@@ -25,6 +31,7 @@ from dsms.organization.provisioning_exceptions import (
 )
 
 from .provisioning_serializers import (
+    PlatformTenantDirectorySerializer,
     TenantProvisioningInputSerializer,
     TenantProvisioningResultSerializer,
 )
@@ -42,10 +49,10 @@ class ProvisioningConfigurationUnavailable(APIException):
     default_code = "provisioning_configuration"
 
 
-def _require_platform_user(request: Request) -> User:
+def _require_platform_user(request: Request, capability: str) -> User:
     user = cast(User, request.user)
-    if not user.is_active or not user.is_superuser:
-        raise PermissionDenied("Only an active platform superuser may provision tenants.")
+    if not has_platform_capability(user, capability):
+        raise PermissionDenied("The required platform administration permission is missing.")
     return user
 
 
@@ -73,7 +80,7 @@ class TenantProvisioningCollectionView(APIView):
         },
     )
     def post(self, request: Request) -> Response:
-        actor = _require_platform_user(request)
+        actor = _require_platform_user(request, PROVISION_TENANT)
         serializer = TenantProvisioningInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -106,9 +113,24 @@ class TenantProvisioningDetailView(APIView):
         responses=TenantProvisioningResultSerializer,
     )
     def get(self, request: Request, provisioning_id: Any) -> Response:
-        _require_platform_user(request)
+        _require_platform_user(request, VIEW_TENANT_PROVISIONING)
         record = get_object_or_404(
             TenantProvisioningRequest.objects.select_related("company", "initial_admin"),
             pk=provisioning_id,
         )
         return Response(TenantProvisioningResultSerializer(record).data)
+
+
+class PlatformTenantDirectoryView(APIView):
+    """Safe platform tenant metadata without tenant business-resource access."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Platform - Tenant Directory"],
+        responses=PlatformTenantDirectorySerializer(many=True),
+    )
+    def get(self, request: Request) -> Response:
+        _require_platform_user(request, VIEW_PLATFORM_TENANT_DIRECTORY)
+        companies = Company.objects.order_by("code")
+        return Response(PlatformTenantDirectorySerializer(companies, many=True).data)

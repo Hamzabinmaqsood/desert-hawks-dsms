@@ -47,6 +47,11 @@ class TenantProvisioningRequest(UUIDModel, TimeStampedModel):
 
     class Meta:
         ordering = ["-created_at"]
+        permissions = [
+            ("provision_tenant", "Can provision a tenant Company"),
+            ("view_tenant_provisioning", "Can view tenant provisioning status"),
+            ("view_platform_tenant_directory", "Can view the platform tenant directory"),
+        ]
         indexes = [
             models.Index(fields=["status", "created_at"], name="org_prov_status_time_idx"),
             models.Index(fields=["initiated_by", "created_at"], name="org_prov_actor_time_idx"),

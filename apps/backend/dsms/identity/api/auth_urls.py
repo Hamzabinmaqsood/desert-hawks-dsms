@@ -8,6 +8,7 @@ from .auth_views import (
     LogoutView,
     MeAccessScopesView,
     MePermissionsView,
+    MePlatformCapabilitiesView,
     MeView,
     RefreshView,
     VerifyView,
@@ -29,5 +30,10 @@ urlpatterns = [
     ),
     path("me/", MeView.as_view(), name="me"),
     path("me/permissions/", MePermissionsView.as_view(), name="me-permissions"),
+    path(
+        "me/platform-capabilities/",
+        MePlatformCapabilitiesView.as_view(),
+        name="me-platform-capabilities",
+    ),
     path("me/access-scopes/", MeAccessScopesView.as_view(), name="me-access-scopes"),
 ]

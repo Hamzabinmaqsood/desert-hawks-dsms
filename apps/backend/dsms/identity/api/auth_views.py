@@ -12,7 +12,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
-from dsms.identity import access, company_context, selectors
+from dsms.identity import access, company_context, platform_access, selectors
 from dsms.identity.models import User
 from dsms.organization import services as organization_services
 
@@ -26,6 +26,7 @@ from .auth_serializers import (
     LoginSerializer,
     LogoutSerializer,
     PermissionsResponseSerializer,
+    PlatformCapabilitiesResponseSerializer,
     SelectCompanySerializer,
     TokenPairResponseSerializer,
     TokenRefreshResponseSerializer,
@@ -127,6 +128,22 @@ class MePermissionsView(generics.GenericAPIView[Any]):
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         user = cast(User, request.user)
         data = {"permissions": selectors.get_current_user_context(user)["permissions"]}
+        return Response(self.get_serializer(data).data)
+
+
+@extend_schema(tags=["Authentication"])
+class MePlatformCapabilitiesView(generics.GenericAPIView[Any]):
+    """Current product-platform capabilities, independent of tenant scopes."""
+
+    serializer_class = PlatformCapabilitiesResponseSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        capabilities = sorted(platform_access.get_platform_capabilities(cast(User, request.user)))
+        data = {
+            "capabilities": capabilities,
+            "can_access_platform_admin": bool(capabilities),
+        }
         return Response(self.get_serializer(data).data)
 
 

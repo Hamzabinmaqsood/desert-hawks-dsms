@@ -60,6 +60,11 @@ class PermissionsResponseSerializer(serializers.Serializer[Any]):
     permissions = serializers.ListField(child=serializers.CharField(), read_only=True)
 
 
+class PlatformCapabilitiesResponseSerializer(serializers.Serializer[Any]):
+    capabilities = serializers.ListField(child=serializers.CharField(), read_only=True)
+    can_access_platform_admin = serializers.BooleanField(read_only=True)
+
+
 class AccessScopeAssignmentSerializer(serializers.Serializer[Any]):
     id = serializers.UUIDField()
     role_code = serializers.CharField()
