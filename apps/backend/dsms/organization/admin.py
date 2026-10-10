@@ -11,6 +11,7 @@ from .models import (
     Designation,
     OperationalZone,
     Region,
+    TenantProvisioningRequest,
 )
 
 READONLY_TIMESTAMPS = ("created_at", "updated_at")
@@ -62,6 +63,48 @@ class CompanyAdmin(NoHardDeleteAdmin):
         ),
         ("Timestamps", {"fields": READONLY_TIMESTAMPS}),
     )
+
+
+@admin.register(TenantProvisioningRequest)
+class TenantProvisioningRequestAdmin(NoHardDeleteAdmin):
+    """Read-only operator visibility; provisioning is owned by the service API."""
+
+    list_display = (
+        "idempotency_key",
+        "status",
+        "company",
+        "initial_admin",
+        "initiated_by",
+        "attempt_count",
+        "created_at",
+    )
+    list_filter = ("status", "created_at")
+    search_fields = (
+        "idempotency_key",
+        "company__code",
+        "company__legal_name",
+        "initial_admin__email",
+    )
+    readonly_fields = (
+        "id",
+        "idempotency_key",
+        "request_fingerprint",
+        "status",
+        "initiated_by",
+        "company",
+        "initial_admin",
+        "attempt_count",
+        "failure_code",
+        "failure_message",
+        "created_at",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
 
 
 @admin.register(Region)

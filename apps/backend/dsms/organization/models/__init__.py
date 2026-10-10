@@ -4,6 +4,7 @@ from .company import Company
 from .department import Department
 from .designation import Designation
 from .operational_zone import OperationalZone
+from .provisioning import TenantProvisioningRequest, TenantProvisioningStatus
 from .region import Region
 
 __all__ = [
@@ -14,4 +15,6 @@ __all__ = [
     "Designation",
     "OperationalZone",
     "Region",
+    "TenantProvisioningRequest",
+    "TenantProvisioningStatus",
 ]

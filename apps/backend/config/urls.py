@@ -11,6 +11,10 @@ urlpatterns = [
     path("api/v1/auth/", include("dsms.identity.api.auth_urls")),
     path("api/v1/identity/", include("dsms.identity.api.urls")),
     path("api/v1/organization/", include("dsms.organization.api.urls")),
+    path(
+        "api/v1/platform/provisioning/",
+        include("dsms.organization.api.provisioning_urls"),
+    ),
     path("api/v1/workforce/", include("dsms.workforce.api.urls")),
     path("api/v1/documents/", include("dsms.documents.api.urls")),
     path("api/v1/finance/", include("dsms.finance.api.urls")),
