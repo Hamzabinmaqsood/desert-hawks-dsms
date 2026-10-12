@@ -15,6 +15,7 @@ from dsms.audit.services import record_audit_event
 from dsms.identity import access, company_context, platform_access, selectors
 from dsms.identity.models import User
 from dsms.organization import services as organization_services
+from dsms.organization.readiness import get_company_operational_readiness
 
 from .auth_serializers import (
     AccessScopeSummarySerializer,
@@ -23,6 +24,7 @@ from .auth_serializers import (
     CompanyBusinessSettingsSerializer,
     CompanyBusinessSettingsUpdateSerializer,
     CompanyContextResponseSerializer,
+    CompanyOperationalReadinessSerializer,
     LoginSerializer,
     LogoutSerializer,
     PermissionsResponseSerializer,
@@ -262,3 +264,29 @@ class CompanyBusinessSettingsView(CompanyBrandingView):
         return Response(
             CompanyBusinessSettingsSerializer(updated, context={"request": request}).data
         )
+
+
+class CompanyOperationalReadinessView(CompanyBrandingView):
+    """Read operational readiness for the validated selected Company only."""
+
+    http_method_names = ["get", "head", "options"]
+    serializer_class = CompanyOperationalReadinessSerializer
+
+    @extend_schema(tags=["Authentication"], responses=CompanyOperationalReadinessSerializer)
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        company = self._selected_company(request)
+        user = cast(User, request.user)
+        has_view = access.has_permission(
+            user=user,
+            permission="organization.view_company",
+            company=company,
+        )
+        has_change = access.has_permission(
+            user=user,
+            permission="organization.change_company",
+            company=company,
+        )
+        if not (has_view or has_change):
+            raise PermissionDenied("Company operational readiness view permission is required.")
+        readiness = get_company_operational_readiness(company)
+        return Response(readiness.as_dict())

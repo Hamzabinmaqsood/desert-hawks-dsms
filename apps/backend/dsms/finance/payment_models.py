@@ -2,6 +2,7 @@ import uuid
 from decimal import Decimal
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
@@ -182,6 +183,23 @@ class PaymentAccountingProfile(UUIDModel, TimeStampedModel, ActiveModel):
     provider_fee_account = models.ForeignKey(
         "finance.Account", on_delete=models.PROTECT, related_name="payment_fee_profiles"
     )
+
+    def clean(self) -> None:
+        errors: dict[str, str] = {}
+        for field_name in (
+            "payroll_payable_account",
+            "vendor_payable_account",
+            "gateway_clearing_account",
+            "bank_account",
+            "provider_fee_account",
+        ):
+            account = getattr(self, field_name)
+            if account.company_id != self.company_id:
+                errors[field_name] = "Account must belong to the payment profile company."
+            elif not account.is_active or not account.allow_posting:
+                errors[field_name] = "Account must be active and allow posting."
+        if errors:
+            raise ValidationError(errors)
 
 
 class PaymentBatch(UUIDModel, TimeStampedModel):

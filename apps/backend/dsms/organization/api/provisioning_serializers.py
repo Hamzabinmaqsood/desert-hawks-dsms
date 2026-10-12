@@ -1,8 +1,13 @@
-from typing import Any
+from typing import Any, cast
+from uuid import UUID
 
 from rest_framework import serializers
 
 from dsms.organization.models import Company, TenantProvisioningRequest
+from dsms.organization.readiness import (
+    CompanyOperationalReadiness,
+    get_company_operational_readiness,
+)
 
 
 class ProvisioningCompanyInputSerializer(serializers.Serializer[Any]):
@@ -81,6 +86,7 @@ class ProvisioningAdminResultSerializer(serializers.Serializer[Any]):
 class TenantProvisioningResultSerializer(serializers.ModelSerializer[TenantProvisioningRequest]):
     company = ProvisioningCompanyResultSerializer(read_only=True)
     initial_admin = ProvisioningAdminResultSerializer(read_only=True)
+    operational_readiness = serializers.SerializerMethodField()
 
     class Meta:
         model = TenantProvisioningRequest
@@ -93,14 +99,29 @@ class TenantProvisioningResultSerializer(serializers.ModelSerializer[TenantProvi
             "attempt_count",
             "failure_code",
             "failure_message",
+            "operational_readiness",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
 
+    def get_operational_readiness(self, obj: TenantProvisioningRequest) -> dict[str, Any] | None:
+        if obj.company is None:
+            return None
+        readiness = get_company_operational_readiness(obj.company)
+        return {
+            "status": readiness.status,
+            "blocker_count": readiness.blocker_count,
+            "blocker_codes": [b.code for b in readiness.blockers],
+        }
+
 
 class PlatformTenantDirectorySerializer(serializers.ModelSerializer[Company]):
     """Allowlisted platform metadata; never nests tenant business resources."""
+
+    operational_status = serializers.SerializerMethodField()
+    blocker_count = serializers.SerializerMethodField()
+    blocker_codes = serializers.SerializerMethodField()
 
     class Meta:
         model = Company
@@ -113,6 +134,30 @@ class PlatformTenantDirectorySerializer(serializers.ModelSerializer[Company]):
             "country_code",
             "timezone",
             "default_currency",
+            "operational_status",
+            "blocker_count",
+            "blocker_codes",
             "created_at",
         ]
         read_only_fields = fields
+
+    def _operational_readiness(self, obj: Company) -> CompanyOperationalReadiness:
+        cache = cast(
+            dict[UUID, CompanyOperationalReadiness] | None,
+            getattr(self, "_operational_readiness_cache", None),
+        )
+        if cache is None:
+            cache = {}
+            self._operational_readiness_cache = cache
+        if obj.pk not in cache:
+            cache[obj.pk] = get_company_operational_readiness(obj)
+        return cache[obj.pk]
+
+    def get_operational_status(self, obj: Company) -> str:
+        return self._operational_readiness(obj).status
+
+    def get_blocker_count(self, obj: Company) -> int:
+        return self._operational_readiness(obj).blocker_count
+
+    def get_blocker_codes(self, obj: Company) -> list[str]:
+        return [b.code for b in self._operational_readiness(obj).blockers]

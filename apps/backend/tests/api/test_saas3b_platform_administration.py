@@ -117,6 +117,9 @@ def test_platform_only_operator_provisions_and_reads_safe_metadata_without_tenan
         "country_code",
         "timezone",
         "default_currency",
+        "operational_status",
+        "blocker_count",
+        "blocker_codes",
         "created_at",
     }
 

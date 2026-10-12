@@ -269,3 +269,28 @@ class CompanyBusinessSettingsUpdateSerializer(serializers.Serializer[Any]):
             if duplicate_errors:
                 raise serializers.ValidationError(duplicate_errors)
         return attrs
+
+
+class ReadinessItemSerializer(serializers.Serializer[Any]):
+    code = serializers.CharField(read_only=True)
+    category = serializers.CharField(read_only=True)
+    severity = serializers.CharField(read_only=True)
+    message = serializers.CharField(read_only=True)
+    details = serializers.DictField(read_only=True)
+
+
+class CategoryCheckSerializer(serializers.Serializer[Any]):
+    status = serializers.CharField(read_only=True)
+    summary = serializers.CharField(read_only=True)
+    items = ReadinessItemSerializer(many=True, read_only=True)
+
+
+class CompanyOperationalReadinessSerializer(serializers.Serializer[Any]):
+    company_id = serializers.UUIDField(read_only=True)
+    company_code = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    blocker_count = serializers.IntegerField(read_only=True)
+    warning_count = serializers.IntegerField(read_only=True)
+    blockers = ReadinessItemSerializer(many=True, read_only=True)
+    warnings = ReadinessItemSerializer(many=True, read_only=True)
+    checks = serializers.DictField(child=CategoryCheckSerializer(), read_only=True)
