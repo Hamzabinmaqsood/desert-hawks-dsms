@@ -5,11 +5,17 @@ from .registry import (
     UnknownIntegrityCheckError,
     UnknownIntegrityDomainError,
 )
-from .scanner import IntegrityExecutionError, get_default_registry, run_integrity_scan
+from .scanner import (
+    IntegrityAuditOptions,
+    IntegrityExecutionError,
+    get_default_registry,
+    run_integrity_scan,
+)
 from .types import (
     INTEGRITY_SCHEMA_VERSION,
     IntegrityFinding,
     IntegrityScanResult,
+    IntegrityScanScope,
     IntegritySeverity,
 )
 
@@ -18,9 +24,11 @@ __all__ = [
     "DuplicateIntegrityCheckError",
     "IntegrityCheck",
     "IntegrityCheckRegistry",
+    "IntegrityAuditOptions",
     "IntegrityExecutionError",
     "IntegrityFinding",
     "IntegrityScanResult",
+    "IntegrityScanScope",
     "IntegritySeverity",
     "UnknownIntegrityCheckError",
     "UnknownIntegrityDomainError",

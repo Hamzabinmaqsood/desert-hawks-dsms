@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from functools import partial
 from typing import Any, cast
+
+from django.apps import apps
 
 from dsms.billing.models import (
     ClientCreditNote,
@@ -15,6 +18,7 @@ from dsms.finance.payment_models import PaymentAccountingProfile
 from dsms.finance.procurement_models import PaymentVoucher, VendorBill
 from dsms.identity.models import UserRoleAssignment
 
+from .coverage import TENANT_RELATION_SPECS
 from .registry import IntegrityCheck
 from .types import IntegrityFinding, IntegrityScanScope, IntegritySeverity
 
@@ -144,7 +148,11 @@ def scan_adjustment_relations(scope: IntegrityScanScope) -> Iterable[IntegrityFi
         (ClientDebitNote, "billing.ClientDebitNote"),
     ):
         queryset = model.objects.values(
-            "id", "company_id", "client__company_id", "invoice__company_id"
+            "id",
+            "company_id",
+            "client__company_id",
+            "invoice__company_id",
+            "accounting_journal__company_id",
         )
         yield from _direct_company_findings(
             queryset=queryset,
@@ -153,7 +161,11 @@ def scan_adjustment_relations(scope: IntegrityScanScope) -> Iterable[IntegrityFi
             check_id=check_id,
             domain="billing",
             resource_type=resource_type,
-            relations=(("client", "client__company_id"), ("invoice", "invoice__company_id")),
+            relations=(
+                ("client", "client__company_id"),
+                ("invoice", "invoice__company_id"),
+                ("accounting_journal", "accounting_journal__company_id"),
+            ),
         )
 
 
@@ -319,6 +331,56 @@ def _direct_company_findings(
                 )
 
 
+def scan_manifest_relations(
+    scope: IntegrityScanScope, *, check_id: str
+) -> Iterable[IntegrityFinding]:
+    for spec in TENANT_RELATION_SPECS:
+        if spec.check_id != check_id or spec.model_label in {
+            "billing.ClientCreditNote",
+            "billing.ClientDebitNote",
+            "billing.ClientInvoice",
+            "deployment.EmployeeDeployment",
+            "documents.EmployeeDocument",
+            "finance.PaymentAccountingProfile",
+            "finance.PaymentVoucher",
+            "finance.VendorBill",
+            "identity.UserRoleAssignment",
+        }:
+            continue
+        model = apps.get_model(spec.model_label)
+        relation_paths = tuple((name, f"{name}__company_id") for name in spec.relation_fields)
+        queryset = model.objects.values("id", "company_id", *(path for _, path in relation_paths))
+        yield from _direct_company_findings(
+            queryset=queryset,
+            scope=scope,
+            company_path="company_id",
+            check_id=check_id,
+            domain=check_id.partition(".")[0],
+            resource_type=spec.model_label,
+            relations=relation_paths,
+        )
+
+
+MANIFEST_CHECKS = tuple(
+    IntegrityCheck(
+        check_id=check_id,
+        domain=check_id.partition(".")[0],
+        description=f"Explicit tenant-relation manifest coverage for {check_id.partition('.')[0]}.",
+        severity=ERROR,
+        scanner=partial(scan_manifest_relations, check_id=check_id),
+    )
+    for check_id in (
+        "analytics.tenant_relations",
+        "assets.tenant_relations",
+        "attendance.tenant_relations",
+        "incidents.tenant_relations",
+        "patrol.tenant_relations",
+        "repository.remaining_tenant_relations",
+        "supervision.tenant_relations",
+    )
+)
+
+
 DEFAULT_INTEGRITY_CHECKS = (
     IntegrityCheck(
         check_id="billing.adjustment.invoice_company_match",
@@ -383,4 +445,4 @@ DEFAULT_INTEGRITY_CHECKS = (
         severity=ERROR,
         scanner=scan_role_assignment_scope,
     ),
-)
+) + MANIFEST_CHECKS

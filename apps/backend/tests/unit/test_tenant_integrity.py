@@ -44,6 +44,9 @@ def test_default_registry_discovery_is_explicit_and_deterministic() -> None:
     second = get_default_registry()
 
     expected = (
+        "analytics.tenant_relations",
+        "assets.tenant_relations",
+        "attendance.tenant_relations",
         "billing.adjustment.invoice_company_match",
         "billing.invoice.tenant_relations",
         "billing.receipt_allocation.invoice_company_match",
@@ -53,6 +56,10 @@ def test_default_registry_discovery_is_explicit_and_deterministic() -> None:
         "finance.payment_voucher.tenant_relations",
         "finance.vendor_bill.tenant_relations",
         "identity.role_assignment.scope_company_match",
+        "incidents.tenant_relations",
+        "patrol.tenant_relations",
+        "repository.remaining_tenant_relations",
+        "supervision.tenant_relations",
     )
     assert tuple(check.check_id for check in first.checks) == expected
     assert tuple(check.check_id for check in second.checks) == expected

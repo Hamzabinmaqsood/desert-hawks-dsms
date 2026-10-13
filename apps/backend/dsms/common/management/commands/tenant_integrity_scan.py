@@ -6,7 +6,7 @@ from uuid import UUID
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
-from dsms.common.integrity import IntegrityExecutionError, run_integrity_scan
+from dsms.common.integrity import IntegrityAuditOptions, IntegrityExecutionError, run_integrity_scan
 from dsms.common.integrity.registry import (
     UnknownIntegrityCheckError,
     UnknownIntegrityDomainError,
@@ -22,15 +22,31 @@ class Command(BaseCommand):
         parser.add_argument("--domain", action="append", dest="domains")
         parser.add_argument("--check", action="append", dest="check_ids")
         parser.add_argument("--company", dest="company_selector")
+        parser.add_argument("--audit", action="store_true")
+        parser.add_argument("--statement-timeout-ms", type=int, default=30_000)
+        parser.add_argument("--lock-timeout-ms", type=int, default=1_000)
+        parser.add_argument("--max-findings", type=int, default=1_000)
 
     def handle(self, *args: Any, **options: Any) -> None:
         company = self._resolve_company(options["company_selector"])
         try:
+            audit_options = (
+                IntegrityAuditOptions(
+                    statement_timeout_ms=options["statement_timeout_ms"],
+                    lock_timeout_ms=options["lock_timeout_ms"],
+                    detail_limit=options["max_findings"],
+                )
+                if options["audit"]
+                else None
+            )
             result = run_integrity_scan(
                 domains=options["domains"],
                 check_ids=options["check_ids"],
                 company_id=company.id if company is not None else None,
+                audit_options=audit_options,
             )
+        except ValueError as exc:
+            raise CommandError(str(exc), returncode=2) from exc
         except (UnknownIntegrityCheckError, UnknownIntegrityDomainError) as exc:
             raise CommandError(str(exc), returncode=2) from exc
         except IntegrityExecutionError as exc:

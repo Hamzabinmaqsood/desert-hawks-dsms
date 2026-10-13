@@ -37,6 +37,10 @@ test:
 	uv run --project apps/backend pytest apps/backend/tests
 	pnpm --filter admin-web test
 
+test-tenant-integrity:
+	@test -n "$(DSMS_TEST_DATABASE_NAME)" || (echo "DSMS_TEST_DATABASE_NAME is required"; exit 2)
+	docker compose exec -T -e DJANGO_SETTINGS_MODULE=config.settings.test_postgresql -e DSMS_TEST_DATABASE_NAME="$(DSMS_TEST_DATABASE_NAME)" backend uv run pytest --no-cov tests/unit/test_tenant_integrity.py tests/unit/test_tenant_integrity_command.py tests/unit/test_tenant_integrity_coverage.py tests/integration/test_tenant_integrity_scanner.py tests/integration/test_tenant_integrity_manifest.py tests/integration/test_tenant_integrity_audit.py tests/api/test_saas1d_security.py
+
 lint:
 	uv run --project apps/backend ruff check apps/backend
 	pnpm --filter admin-web lint

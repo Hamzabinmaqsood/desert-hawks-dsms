@@ -110,6 +110,26 @@ class IntegrityScanSummary:
 
 
 @dataclass(frozen=True)
+class IntegrityAuditMetadata:
+    read_only: bool
+    statement_timeout_ms: int
+    lock_timeout_ms: int
+    detail_limit: int
+    reported_findings: int
+    findings_truncated: bool
+
+    def as_dict(self) -> dict[str, int | bool]:
+        return {
+            "read_only": self.read_only,
+            "statement_timeout_ms": self.statement_timeout_ms,
+            "lock_timeout_ms": self.lock_timeout_ms,
+            "detail_limit": self.detail_limit,
+            "reported_findings": self.reported_findings,
+            "findings_truncated": self.findings_truncated,
+        }
+
+
+@dataclass(frozen=True)
 class IntegrityScanResult:
     started_at: datetime
     completed_at: datetime
@@ -117,9 +137,10 @@ class IntegrityScanResult:
     checks_run: tuple[ExecutedIntegrityCheck, ...]
     summary: IntegrityScanSummary
     findings: tuple[IntegrityFinding, ...]
+    audit: IntegrityAuditMetadata | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema_version": INTEGRITY_SCHEMA_VERSION,
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat(),
@@ -128,3 +149,6 @@ class IntegrityScanResult:
             "summary": self.summary.as_dict(),
             "findings": [finding.as_dict() for finding in self.findings],
         }
+        if self.audit is not None:
+            payload["audit"] = self.audit.as_dict()
+        return payload
