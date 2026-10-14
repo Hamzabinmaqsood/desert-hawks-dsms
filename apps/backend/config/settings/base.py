@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "dsms.common",
     "dsms.identity",
     "dsms.organization",
+    "dsms.subscriptions",
     "dsms.workforce",
     "dsms.documents",
     "dsms.finance",
@@ -185,6 +186,12 @@ SPECTACULAR_SETTINGS = {
         ),
         "PaymentSettlementStatusEnum": "dsms.finance.payment_models.SettlementStatus.choices",
         "BillingAdjustmentStatusEnum": "dsms.billing.enums.AdjustmentStatus.choices",
+        "CommercialSubscriptionStatusEnum": (
+            "dsms.subscriptions.models.SubscriptionStatus.choices"
+        ),
+        "CommercialSubscriptionEventTypeEnum": (
+            "dsms.subscriptions.models.SubscriptionEventType.choices"
+        ),
     },
 }
 

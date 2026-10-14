@@ -391,13 +391,19 @@ NO_INDEPENDENT_TENANT_RELATIONS = frozenset(
         "performance.KPIDefinition",
         "performance.PerformanceCycle",
         "performance.PerformanceRatingScale",
+        "subscriptions.Subscription",
         "training.TrainingCategory",
     }
 )
 
 DATABASE_CONSTRAINED_MODELS = frozenset({"organization.TenantProvisioningRequest"})
 DERIVED_CHILD_FAMILIES = frozenset(
-    {"billing.ClientInvoiceLine", "finance.JournalEntryLine", "finance.VendorBillLine"}
+    {
+        "billing.ClientInvoiceLine",
+        "finance.JournalEntryLine",
+        "finance.VendorBillLine",
+        "subscriptions.SubscriptionEvent",
+    }
 )
 NON_PERSISTENT_CI_SURFACES = frozenset(
     {

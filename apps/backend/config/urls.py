@@ -16,6 +16,7 @@ urlpatterns = [
         include("dsms.organization.api.provisioning_urls"),
     ),
     path("api/v1/platform/", include("dsms.organization.api.platform_urls")),
+    path("api/v1/platform/", include("dsms.subscriptions.api.urls")),
     path("api/v1/workforce/", include("dsms.workforce.api.urls")),
     path("api/v1/documents/", include("dsms.documents.api.urls")),
     path("api/v1/finance/", include("dsms.finance.api.urls")),
