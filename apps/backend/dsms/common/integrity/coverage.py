@@ -6,6 +6,7 @@ from enum import StrEnum
 
 class IntegrityCoverageClassification(StrEnum):
     SCANNED = "SCANNED"
+    GLOBAL_NON_TENANT = "GLOBAL_NON_TENANT"
     NO_INDEPENDENT_TENANT_RELATION = "NO_INDEPENDENT_TENANT_RELATION"
     DATABASE_CONSTRAINED = "DATABASE_CONSTRAINED"
     DERIVED_CHILD_OWNERSHIP = "DERIVED_CHILD_OWNERSHIP"
@@ -391,6 +392,7 @@ NO_INDEPENDENT_TENANT_RELATIONS = frozenset(
         "performance.KPIDefinition",
         "performance.PerformanceCycle",
         "performance.PerformanceRatingScale",
+        "subscriptions.CompanyModulePolicy",
         "subscriptions.Subscription",
         "training.TrainingCategory",
     }
@@ -402,7 +404,16 @@ DERIVED_CHILD_FAMILIES = frozenset(
         "billing.ClientInvoiceLine",
         "finance.JournalEntryLine",
         "finance.VendorBillLine",
+        "subscriptions.SubscriptionEntitlementEvent",
         "subscriptions.SubscriptionEvent",
+        "subscriptions.SubscriptionModuleOverride",
+        "subscriptions.SubscriptionModuleSnapshot",
+    }
+)
+GLOBAL_NON_TENANT_MODELS = frozenset(
+    {
+        "subscriptions.PlanEntitlementEvent",
+        "subscriptions.PlanModuleDefault",
     }
 )
 NON_PERSISTENT_CI_SURFACES = frozenset(

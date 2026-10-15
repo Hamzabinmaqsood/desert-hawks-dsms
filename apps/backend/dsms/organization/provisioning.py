@@ -153,6 +153,16 @@ def _create_company(data: ProvisionedCompanyData) -> Company:
         raise TenantProvisioningValidationError({"company": {"detail": [str(exc)]}}) from exc
 
 
+def _create_legacy_module_policy(company: Company) -> None:
+    # Local import keeps tenant provisioning independent from subscription service imports.
+    from dsms.subscriptions.models import CompanyModulePolicy, CompanyModulePolicyMode
+
+    CompanyModulePolicy.objects.create(
+        company=company,
+        mode=CompanyModulePolicyMode.LEGACY_FULL,
+    )
+
+
 def _initial_admin(data: InitialAdminData) -> User:
     user = User.objects.select_for_update().filter(email__iexact=data.email).first()
     if user is None:
@@ -296,6 +306,7 @@ def provision_company(
 
             roles = _tenant_admin_roles()
             company = _create_company(normalized.company)
+            _create_legacy_module_policy(company)
             initial_admin = _initial_admin(normalized.initial_admin)
             _bootstrap_initial_admin(actor=actor, user=initial_admin, company=company, roles=roles)
 

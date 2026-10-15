@@ -24,6 +24,14 @@ from dsms.organization.provisioning_exceptions import (
     TenantProvisioningConflictError,
     TenantProvisioningValidationError,
 )
+from dsms.subscriptions.models import (
+    CompanyModulePolicy,
+    CompanyModulePolicyMode,
+    Plan,
+    Subscription,
+    SubscriptionModuleOverride,
+    SubscriptionModuleSnapshot,
+)
 from tests.factories.identity import RoleFactory, UserFactory, UserRoleAssignmentFactory
 from tests.factories.organization import CompanyFactory
 
@@ -110,6 +118,13 @@ def test_provision_company_creates_minimal_configured_tenant_and_admin_access() 
         AccessScopeType.COMPANY
     }
     assert DocumentSequence.objects.filter(company=company).count() == 0
+    assert (
+        CompanyModulePolicy.objects.get(company=company).mode == CompanyModulePolicyMode.LEGACY_FULL
+    )
+    assert Plan.objects.count() == 0
+    assert Subscription.objects.filter(company=company).count() == 0
+    assert SubscriptionModuleSnapshot.objects.count() == 0
+    assert SubscriptionModuleOverride.objects.count() == 0
     assert AuditEvent.objects.filter(action="TENANT_PROVISIONED", company=company).count() == 1
 
 

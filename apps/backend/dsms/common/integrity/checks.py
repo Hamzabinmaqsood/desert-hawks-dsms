@@ -17,6 +17,16 @@ from dsms.documents.models import EmployeeDocument
 from dsms.finance.payment_models import PaymentAccountingProfile
 from dsms.finance.procurement_models import PaymentVoucher, VendorBill
 from dsms.identity.models import UserRoleAssignment
+from dsms.subscriptions.models import (
+    CompanyModulePolicy,
+    CompanyModulePolicyMode,
+    PlanEntitlementEvent,
+    PlanModuleDefault,
+    SubscriptionEntitlementEvent,
+    SubscriptionModuleOverride,
+    SubscriptionModuleSnapshot,
+)
+from dsms.subscriptions.modules import TENANT_MODULE_REGISTRY
 
 from .coverage import TENANT_RELATION_SPECS
 from .registry import IntegrityCheck
@@ -24,6 +34,82 @@ from .types import IntegrityFinding, IntegrityScanScope, IntegritySeverity
 
 ERROR = IntegritySeverity.ERROR
 FINDING_TYPE = "CROSS_COMPANY_RELATION"
+
+
+def scan_subscription_entitlement_configuration(
+    scope: IntegrityScanScope,
+) -> Iterable[IntegrityFinding]:
+    check_id = "subscriptions.entitlement_configuration"
+    known_ids = set(TENANT_MODULE_REGISTRY.module_ids)
+    derived_models = (
+        SubscriptionModuleSnapshot,
+        SubscriptionModuleOverride,
+        SubscriptionEntitlementEvent,
+    )
+    for model in derived_models:
+        queryset = model.objects.exclude(module_id="").values(
+            "id", "module_id", "subscription__company_id"
+        )
+        if scope.company_id is not None:
+            queryset = queryset.filter(subscription__company_id=scope.company_id)
+        for row in queryset.order_by("pk").iterator():
+            if row["module_id"] in known_ids:
+                continue
+            yield IntegrityFinding(
+                check_id=check_id,
+                domain="subscriptions",
+                severity=ERROR,
+                finding_type="UNKNOWN_MODULE_ID",
+                resource_type=model._meta.label,
+                record_id=str(row["id"]),
+                owning_company_id=str(row["subscription__company_id"]),
+                conflicting_company_id=None,
+                relation="module_id",
+                message=f"{model._meta.label}.module_id is not present in the code registry.",
+                metadata={"module_id": row["module_id"]},
+            )
+
+    if scope.company_id is None:
+        for global_model in (PlanModuleDefault, PlanEntitlementEvent):
+            queryset = global_model.objects.exclude(module_id="").values("id", "module_id")
+            for row in queryset.order_by("pk").iterator():
+                if row["module_id"] in known_ids:
+                    continue
+                yield IntegrityFinding(
+                    check_id=check_id,
+                    domain="subscriptions",
+                    severity=ERROR,
+                    finding_type="UNKNOWN_MODULE_ID",
+                    resource_type=global_model._meta.label,
+                    record_id=str(row["id"]),
+                    owning_company_id=None,
+                    conflicting_company_id=None,
+                    relation="module_id",
+                    message=(
+                        f"{global_model._meta.label}.module_id is not present in the code registry."
+                    ),
+                    metadata={"module_id": row["module_id"]},
+                )
+
+    policies = CompanyModulePolicy.objects.filter(
+        mode=CompanyModulePolicyMode.SUBSCRIPTION,
+        company__commercial_subscription__isnull=True,
+    ).values("id", "company_id")
+    if scope.company_id is not None:
+        policies = policies.filter(company_id=scope.company_id)
+    for row in policies.order_by("pk").iterator():
+        yield IntegrityFinding(
+            check_id=check_id,
+            domain="subscriptions",
+            severity=ERROR,
+            finding_type="MISSING_SUBSCRIPTION_ENTITLEMENT_STATE",
+            resource_type=CompanyModulePolicy._meta.label,
+            record_id=str(row["id"]),
+            owning_company_id=str(row["company_id"]),
+            conflicting_company_id=None,
+            relation="company.commercial_subscription",
+            message="Subscription policy Company has no commercial Subscription.",
+        )
 
 
 def _rows(queryset: Any, scope: IntegrityScanScope, company_path: str) -> Iterator[dict[str, Any]]:
@@ -382,6 +468,13 @@ MANIFEST_CHECKS = tuple(
 
 
 DEFAULT_INTEGRITY_CHECKS = (
+    IntegrityCheck(
+        check_id="subscriptions.entitlement_configuration",
+        domain="subscriptions",
+        description="Commercial entitlement module IDs and rollout state are structurally valid.",
+        severity=ERROR,
+        scanner=scan_subscription_entitlement_configuration,
+    ),
     IntegrityCheck(
         check_id="billing.adjustment.invoice_company_match",
         domain="billing",

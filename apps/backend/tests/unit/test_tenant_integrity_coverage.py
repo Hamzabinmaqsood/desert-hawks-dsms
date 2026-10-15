@@ -10,6 +10,7 @@ from dsms.common.integrity import get_default_registry
 from dsms.common.integrity.coverage import (
     DATABASE_CONSTRAINED_MODELS,
     DERIVED_CHILD_FAMILIES,
+    GLOBAL_NON_TENANT_MODELS,
     LATER_SAAS_SURFACES,
     NO_INDEPENDENT_TENANT_RELATIONS,
     NON_PERSISTENT_CI_SURFACES,
@@ -67,6 +68,10 @@ def test_manifest_has_registered_checks_and_no_unknown_classification() -> None:
         for spec in TENANT_RELATION_SPECS
     )
     assert DERIVED_CHILD_FAMILIES
+    assert {
+        "subscriptions.PlanEntitlementEvent",
+        "subscriptions.PlanModuleDefault",
+    } == GLOBAL_NON_TENANT_MODELS
     assert NON_PERSISTENT_CI_SURFACES
     assert LATER_SAAS_SURFACES
 

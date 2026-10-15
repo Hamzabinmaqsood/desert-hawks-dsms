@@ -59,6 +59,7 @@ def test_default_registry_discovery_is_explicit_and_deterministic() -> None:
         "incidents.tenant_relations",
         "patrol.tenant_relations",
         "repository.remaining_tenant_relations",
+        "subscriptions.entitlement_configuration",
         "supervision.tenant_relations",
     )
     assert tuple(check.check_id for check in first.checks) == expected

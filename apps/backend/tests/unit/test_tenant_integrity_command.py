@@ -44,13 +44,13 @@ def corrupt_payment_profile() -> tuple[Company, Company, PaymentAccountingProfil
 def test_clean_text_and_json_commands() -> None:
     text_output = StringIO()
     call_command("tenant_integrity_scan", stdout=text_output)
-    assert "16 checks, 0 findings (0 errors, 0 warnings)" in text_output.getvalue()
+    assert "17 checks, 0 findings (0 errors, 0 warnings)" in text_output.getvalue()
 
     json_output = StringIO()
     call_command("tenant_integrity_scan", "--format", "json", stdout=json_output)
     payload = json.loads(json_output.getvalue())
     assert payload["schema_version"] == 1
-    assert payload["summary"]["total_checks"] == 16
+    assert payload["summary"]["total_checks"] == 17
     assert payload["summary"]["total_findings"] == 0
 
 

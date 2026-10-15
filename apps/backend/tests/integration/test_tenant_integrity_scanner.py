@@ -28,12 +28,38 @@ from dsms.finance.procurement_models import PaymentVoucher, Vendor, VendorBill
 from dsms.identity.enums import AccessScopeType
 from dsms.identity.models import UserRoleAssignment
 from dsms.organization.models import Company
+from dsms.subscriptions.models import PlanModuleDefault, SubscriptionModuleSnapshot
 from tests.factories.documents import DocumentTypeFactory, EmployeeDocumentFactory
 from tests.factories.identity import RoleFactory, UserFactory, UserRoleAssignmentFactory
 from tests.factories.organization import BranchFactory, CompanyFactory
+from tests.factories.subscriptions import SubscriptionFactory
 from tests.factories.workforce import EmployeeFactory
 
 pytestmark = pytest.mark.django_db
+
+
+def test_entitlement_integrity_check_reports_unknown_code_registry_ids() -> None:
+    subscription = SubscriptionFactory.create()
+    PlanModuleDefault.objects.create(plan=subscription.plan, module_id="retired_module")
+    SubscriptionModuleSnapshot.objects.create(
+        subscription=subscription,
+        module_id="historical_unknown",
+        source_plan_entitlement_revision=0,
+    )
+
+    result = run_integrity_scan(check_ids=["subscriptions.entitlement_configuration"])
+    scoped = run_integrity_scan(
+        check_ids=["subscriptions.entitlement_configuration"],
+        company_id=subscription.company_id,
+    )
+
+    assert result.summary.total_findings == 2
+    assert {finding.metadata["module_id"] for finding in result.findings} == {
+        "historical_unknown",
+        "retired_module",
+    }
+    assert scoped.summary.total_findings == 1
+    assert scoped.findings[0].owning_company_id == str(subscription.company_id)
 
 
 def account(company: Company, code: str, account_type: str = AccountType.ASSET) -> Account:
