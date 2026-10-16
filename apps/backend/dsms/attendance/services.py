@@ -20,6 +20,7 @@ from dsms.deployment.models import DutyAssignment
 from dsms.identity.models import User
 from dsms.leave.models import LeaveRequest
 from dsms.organization.models import Branch, Company
+from dsms.subscriptions.enforcement import requires_company_module
 
 from .enums import (
     AttendanceEventType,
@@ -129,6 +130,7 @@ def evaluate_geofence(
     )
 
 
+@requires_company_module("attendance", argument="station")
 def generate_qr_station_token(*, station: AttendanceQRStation) -> str:
     station = consistent_qr_stations(AttendanceQRStation.objects.all()).get(pk=station.pk)
     token = secrets.token_urlsafe(32)
@@ -160,6 +162,7 @@ def verify_attendance_qr(
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="duty_assignment")
 def check_in_for_duty(
     *,
     user: User,
@@ -325,6 +328,7 @@ def check_in_for_duty(
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="duty_assignment")
 def check_out_from_duty(
     *, user: User, duty_assignment: DutyAssignment, event_time: datetime, client_event_id=None
 ) -> AttendanceRecord:
@@ -384,6 +388,7 @@ def check_out_from_duty(
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="attendance_period")
 def generate_expected_attendance(*, attendance_period: AttendancePeriod) -> int:
     period = consistent_attendance_periods(
         AttendancePeriod.objects.select_for_update(of=("self",))
@@ -435,6 +440,7 @@ def generate_expected_attendance(*, attendance_period: AttendancePeriod) -> int:
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="record")
 def verify_attendance(*, record: AttendanceRecord, actor: User) -> AttendanceRecord:
     obj = consistent_attendance_records(
         AttendanceRecord.objects.select_for_update(of=("self",))
@@ -464,6 +470,7 @@ def verify_attendance(*, record: AttendanceRecord, actor: User) -> AttendanceRec
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="record")
 def request_attendance_correction(
     *,
     record: AttendanceRecord,
@@ -500,6 +507,7 @@ def request_attendance_correction(
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="correction")
 def approve_attendance_correction(
     *, correction: AttendanceCorrectionRequest, actor: User, notes: str = ""
 ) -> AttendanceRecord:
@@ -557,6 +565,7 @@ def approve_attendance_correction(
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="period")
 def approve_attendance_period(*, period: AttendancePeriod, actor: User) -> AttendancePeriod:
     obj = consistent_attendance_periods(
         AttendancePeriod.objects.select_for_update(of=("self",))
@@ -606,6 +615,7 @@ def approve_attendance_period(*, period: AttendancePeriod, actor: User) -> Atten
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="period")
 def lock_attendance_period(*, period: AttendancePeriod, actor: User) -> AttendancePeriod:
     obj = consistent_attendance_periods(
         AttendancePeriod.objects.select_for_update(of=("self",))
@@ -632,6 +642,7 @@ def lock_attendance_period(*, period: AttendancePeriod, actor: User) -> Attendan
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="attendance_period")
 def build_payroll_timekeeping_input(
     *, attendance_period: AttendancePeriod, payroll_period, employee, actor: User
 ):
@@ -704,6 +715,7 @@ def build_payroll_timekeeping_input(
 
 
 @transaction.atomic
+@requires_company_module("attendance", argument="record")
 def flag_post_lock_adjustment(*, record: AttendanceRecord, actor: User, reason: str) -> None:
     obj = consistent_attendance_records(
         AttendanceRecord.objects.select_for_update(of=("self",))

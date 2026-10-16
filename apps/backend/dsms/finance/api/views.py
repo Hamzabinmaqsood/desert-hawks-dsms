@@ -10,6 +10,8 @@ from rest_framework.views import APIView
 
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.organization.models import Company
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 
 from .. import selectors, services
 from ..exceptions import FinanceError, to_error_dict
@@ -46,6 +48,7 @@ class FinancePermission(BasePermission):
 
 class CompanyScopedMixin:
     def require_company(self, request: Request, company: Any, permission: str) -> None:
+        cast(TenantModuleViewMixin, self).require_modules_for(company)
         if not access.has_permission(
             user=cast(User, request.user), permission=permission, company=company
         ):
@@ -53,12 +56,15 @@ class CompanyScopedMixin:
 
 
 class AccountViewSet(
+    TenantModuleViewMixin,
     CompanyScopedMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
     viewsets.GenericViewSet[Any],
 ):
+    required_module_ids = ("finance_core",)
+    module_company_lookup = "company_id"
     permission_classes = [FinancePermission]
     permission_code = "finance.manage_chart_of_accounts"
     serializer_class: Any = AccountSerializer
@@ -156,12 +162,15 @@ class PeriodViewSet(AccountViewSet):
 
 
 class JournalViewSet(
+    TenantModuleViewMixin,
     CompanyScopedMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
     viewsets.GenericViewSet[Any],
 ):
+    required_module_ids = ("finance_core",)
+    module_company_lookup = "company_id"
     permission_classes = [FinancePermission]
     http_method_names = ["get", "post", "head", "options"]
     action_permissions = {
@@ -230,7 +239,8 @@ class TrialBalanceResponseSerializer(serializers.Serializer[Any]):
     """Schema marker for calculated trial-balance rows."""
 
 
-class TrialBalanceView(APIView):
+class TrialBalanceView(TenantModuleViewMixin, APIView):
+    required_module_ids = ("finance_core",)
     serializer_class = TrialBalanceResponseSerializer
     permission_classes = [FinancePermission]
     permission_code = "finance.view_financial_reports"
@@ -242,4 +252,5 @@ class TrialBalanceView(APIView):
         )
         if not company or company not in {str(item) for item in ids}:
             raise PermissionDenied()
+        self.require_modules_for(Company.objects.get(pk=company))
         return Response(selectors.trial_balance(company_id=company))  # type: ignore[arg-type]

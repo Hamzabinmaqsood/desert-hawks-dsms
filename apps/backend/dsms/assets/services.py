@@ -17,6 +17,7 @@ from dsms.finance.procurement_models import PurchaseOrderLine, PurchaseReceipt, 
 from dsms.finance.services import next_document_number
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.subscriptions.enforcement import require_company_module, requires_company_module
 
 from .enums import AssetStatus, CustodyType, IssueStatus, MovementType, TrackingMethod
 from .models import (
@@ -90,6 +91,7 @@ def procurement_registered_quantity(*, handoff: ProcurementInventoryHandoff) -> 
 
 
 @transaction.atomic
+@requires_company_module("asset_management", argument="receipt_line")
 def establish_procurement_handoff(
     *, receipt_line: PurchaseReceiptLine, asset_item: AssetItem, actor: User
 ) -> ProcurementInventoryHandoff:
@@ -138,6 +140,7 @@ def establish_procurement_handoff(
 
 
 @transaction.atomic
+@requires_company_module("asset_management", argument="receipt_line")
 def register_procurement_inventory(
     *,
     receipt_line: PurchaseReceiptLine,
@@ -397,6 +400,7 @@ def get_stock_balance(
 
 
 @transaction.atomic
+@requires_company_module("asset_management", argument="stock_account")
 def post_stock_transaction(
     *,
     stock_account: StockAccount,
@@ -439,6 +443,7 @@ def post_stock_transaction(
 
 
 @transaction.atomic
+@requires_company_module("asset_management", argument="issue")
 def submit_asset_issue(*, issue: AssetIssue) -> AssetIssue:
     issue = AssetIssue.objects.select_for_update().get(pk=issue.pk)
     if issue.status != IssueStatus.DRAFT or not issue.lines.exists():
@@ -449,6 +454,7 @@ def submit_asset_issue(*, issue: AssetIssue) -> AssetIssue:
 
 
 @transaction.atomic
+@requires_company_module("asset_management", argument="issue")
 def approve_asset_issue(*, issue: AssetIssue, approved_by: User) -> AssetIssue:
     issue = AssetIssue.objects.select_for_update().get(pk=issue.pk)
     if issue.status != IssueStatus.PENDING_APPROVAL:
@@ -494,6 +500,7 @@ def _recipient(issue: AssetIssue) -> tuple[str, dict[str, Any]]:
 
 
 @transaction.atomic
+@requires_company_module("asset_management", argument="issue")
 def issue_assets(*, issue: AssetIssue, issued_by: User) -> AssetIssue:
     issue = (
         AssetIssue.objects.select_for_update()
@@ -575,6 +582,7 @@ def receive_asset_return(*, return_record: AssetReturn) -> AssetReturn:
         .get(pk=return_record.pk)
     )
     issue = AssetIssue.objects.select_for_update().get(pk=record.original_issue_id)
+    require_company_module(issue.company, "asset_management")
     for return_line in record.lines.all():
         line = AssetIssueLine.objects.select_for_update().get(pk=return_line.issue_line_id)
         if line.returned_quantity + return_line.quantity > (line.issued_quantity or 0):
@@ -647,6 +655,7 @@ def receive_asset_return(*, return_record: AssetReturn) -> AssetReturn:
 
 
 @transaction.atomic
+@requires_company_module("asset_management", argument="kit")
 def create_issue_from_kit(
     *, kit: AssetKitTemplate, requested_by: User, employee: Any = None, site: Any = None
 ) -> AssetIssue:

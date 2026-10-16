@@ -13,6 +13,7 @@ from dsms.leave.services import (
     evaluate_employee_availability,
     submit_leave_request,
 )
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 from dsms.workforce.models import Employee
 
 from .serializers import AvailabilitySerializer, LeaveRequestSerializer, LeaveTypeSerializer
@@ -22,7 +23,15 @@ def own_employee(user):
     return get_object_or_404(consistent_employees(Employee.objects.all()), user=user)
 
 
-class LeaveTypeViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class LeaveTypeViewSet(
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    required_module_ids = ("leave",)
+    module_company_lookup = "company_id"
+    module_allow_global_rows = True
     permission_classes = [IsAuthenticated]
     serializer_class = LeaveTypeSerializer
     queryset = LeaveType.objects.none()
@@ -37,11 +46,14 @@ class LeaveTypeViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
 
 
 class MyLeaveRequestViewSet(
+    TenantModuleViewMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
+    required_module_ids = ("leave",)
+    module_company_lookup = "employee__company_id"
     permission_classes = [IsAuthenticated]
     serializer_class = LeaveRequestSerializer
     filterset_fields = ["status", "leave_type"]
@@ -57,6 +69,7 @@ class MyLeaveRequestViewSet(
 
     def create(self, request, *args, **kwargs):
         employee = own_employee(request.user)
+        self.require_modules_for(employee)
         leave_type = get_object_or_404(
             LeaveType.objects.filter(Q(company__isnull=True) | Q(company=employee.company)),
             pk=request.data.get("leave_type"),

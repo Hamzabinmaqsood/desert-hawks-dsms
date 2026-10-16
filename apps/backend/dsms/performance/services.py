@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
+from dsms.subscriptions.enforcement import requires_company_module
 
 from .enums import KPIResultStatus, PerformancePlanStatus
 from .models import (
@@ -47,6 +48,7 @@ def resolve_template(*, employee: Any, cycle: Any) -> PerformanceTemplate | None
 
 
 @transaction.atomic
+@requires_company_module("performance", argument="cycle")
 def generate_performance_plans(
     *, cycle: Any, created_by: Any, employee_queryset: QuerySet[Any]
 ) -> dict[str, Any]:
@@ -72,6 +74,7 @@ def generate_performance_plans(
 
 
 @transaction.atomic
+@requires_company_module("performance", argument="plan")
 def activate_plan(*, plan: EmployeePerformancePlan, actor: Any) -> EmployeePerformancePlan:
     locked = EmployeePerformancePlan.objects.select_for_update().get(pk=plan.pk)
     if locked.status != PerformancePlanStatus.DRAFT:
@@ -98,6 +101,7 @@ def activate_plan(*, plan: EmployeePerformancePlan, actor: Any) -> EmployeePerfo
 
 
 @transaction.atomic
+@requires_company_module("performance", argument="assignment")
 def calculate_kpi_result(*, assignment: EmployeeKPIAssignment, actor: Any) -> PerformanceKPIResult:
     locked = (
         EmployeeKPIAssignment.objects.select_for_update()
@@ -165,6 +169,7 @@ def calculate_score_preview(*, plan: EmployeePerformancePlan) -> dict[str, Any]:
 
 
 @transaction.atomic
+@requires_company_module("performance", argument="plan")
 def finalize_performance_review(
     *, plan: EmployeePerformancePlan, actor: Any, rating_scale: Any, summary: str
 ) -> EmployeePerformancePlan:
@@ -214,6 +219,7 @@ def finalize_performance_review(
 
 
 @transaction.atomic
+@requires_company_module("performance", argument="plan")
 def acknowledge_review(
     *, plan: EmployeePerformancePlan, employee: Any, agrees: bool | None, comments: str
 ) -> PerformanceAcknowledgement:

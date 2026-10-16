@@ -10,6 +10,7 @@ from dsms.audit.services import record_audit_event
 from dsms.documents.exceptions import DocumentValidationError
 from dsms.documents.validators import validate_upload
 from dsms.finance.services import next_document_number
+from dsms.subscriptions.enforcement import requires_company_module
 
 from .enums import (
     AllegationStatus,
@@ -41,6 +42,7 @@ def _event(case: HRCase, event_type: str, actor: Any, title: str) -> None:
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="company")
 def create_hr_case(*, company: Any, category: Any, created_by: Any, **data: Any) -> HRCase:
     number = next_document_number(company=company, prefix="HRC", year=timezone.localdate().year)
     case = HRCase(
@@ -60,6 +62,7 @@ def create_hr_case(*, company: Any, category: Any, created_by: Any, **data: Any)
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="hr_case")
 def submit_case(*, hr_case: HRCase, actor: Any) -> HRCase:
     case = HRCase.objects.select_for_update().get(pk=hr_case.pk)
     if case.status not in {HRCaseStatus.DRAFT, HRCaseStatus.REOPENED}:
@@ -72,6 +75,7 @@ def submit_case(*, hr_case: HRCase, actor: Any) -> HRCase:
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="hr_case")
 def triage_case(*, hr_case: HRCase, actor: Any, case_manager: Any) -> HRCase:
     case = HRCase.objects.select_for_update().get(pk=hr_case.pk)
     if case.status != HRCaseStatus.SUBMITTED:
@@ -85,6 +89,7 @@ def triage_case(*, hr_case: HRCase, actor: Any, case_manager: Any) -> HRCase:
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="hr_case")
 def add_allegation(*, hr_case: HRCase, actor: Any, **data: Any) -> HRCaseAllegation:
     case = HRCase.objects.select_for_update().get(pk=hr_case.pk)
     if case.status in {HRCaseStatus.CLOSED, HRCaseStatus.CANCELLED}:
@@ -101,6 +106,7 @@ def add_allegation(*, hr_case: HRCase, actor: Any, **data: Any) -> HRCaseAllegat
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="allegation")
 def record_allegation_finding(
     *, allegation: HRCaseAllegation, status: str, reasoning: str, actor: Any
 ) -> HRCaseAllegation:
@@ -133,6 +139,7 @@ def record_allegation_finding(
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="investigation")
 def start_investigation(*, investigation: HRInvestigation, actor: Any) -> HRInvestigation:
     item = (
         HRInvestigation.objects.select_for_update()
@@ -153,6 +160,7 @@ def start_investigation(*, investigation: HRInvestigation, actor: Any) -> HRInve
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="hr_case")
 def link_source(
     *,
     hr_case: HRCase,
@@ -176,6 +184,7 @@ def link_source(
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="hr_case")
 def upload_evidence(
     *, hr_case: HRCase, upload: Any, actor: Any, title: str, evidence_type: str, **data: Any
 ) -> HRCaseEvidence:
@@ -209,6 +218,7 @@ def upload_evidence(
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="hr_case")
 def record_decision(*, hr_case: HRCase, actor: Any, **data: Any) -> HRCaseDecision:
     case = HRCase.objects.select_for_update().get(pk=hr_case.pk)
     if hasattr(case, "decision"):
@@ -242,6 +252,7 @@ def record_decision(*, hr_case: HRCase, actor: Any, **data: Any) -> HRCaseDecisi
 
 
 @transaction.atomic
+@requires_company_module("hr_case_management", argument="appeal")
 def decide_appeal(*, appeal: HRCaseAppeal, actor: Any, status: str, summary: str) -> HRCaseAppeal:
     item = (
         HRCaseAppeal.objects.select_for_update(of=("self",))

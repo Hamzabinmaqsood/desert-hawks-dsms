@@ -17,6 +17,11 @@ from rest_framework.response import Response
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission
+from dsms.subscriptions.api.enforcement import (
+    TenantModuleViewMixin,
+    entitled_company_ids,
+    module_api_surface,
+)
 from dsms.workforce.models import Employee
 
 from .. import models, selectors, services
@@ -33,12 +38,15 @@ CREATE_ACTOR_FIELDS = {
 
 
 class NoDeleteViewSet(
+    TenantModuleViewMixin,
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
+    required_module_ids = ("learning",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
     model: type[Any]
@@ -62,6 +70,7 @@ class NoDeleteViewSet(
         )
 
     def _guard_write(self, candidate):
+        self.require_modules_for(candidate)
         user = self.request.user
         company = security.company_for(candidate)
         if company is None:
@@ -204,6 +213,7 @@ CertificateViewSet = basic_viewset(models.TrainingCertificate)
 ExternalCertificationViewSet = basic_viewset(models.ExternalCertification)
 
 
+@module_api_surface("learning")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -213,6 +223,7 @@ def dashboard_summary(request):
     )
 
 
+@module_api_surface("learning")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -224,6 +235,7 @@ def guards_readiness(request):
     )
 
 
+@module_api_surface("learning")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -233,14 +245,17 @@ def employee_readiness(request, employee_id):
         user, permission="training.view_readiness"
     )
     branch_ids = access.get_accessible_branch_ids(user, permission="training.view_readiness")
-    result = services.evaluate_employee_readiness(
-        employee=get_object_or_404(
-            Employee.objects.select_related("company", "branch", "department", "designation"),
-            Q(company_id__in=company_ids) | Q(branch_id__in=branch_ids),
-            pk=employee_id,
-            company__is_active=True,
-        )
+    employee = get_object_or_404(
+        Employee.objects.select_related("company", "branch", "department", "designation"),
+        Q(company_id__in=company_ids) | Q(branch_id__in=branch_ids),
+        pk=employee_id,
+        company__is_active=True,
     )
+    if employee.company_id not in entitled_company_ids(
+        request, [employee.company_id], ("learning",)
+    ):
+        raise Http404
+    result = services.evaluate_employee_readiness(employee=employee)
     return Response(
         {
             "employee_id": str(result.employee.pk),
@@ -254,6 +269,7 @@ def employee_readiness(request, employee_id):
     )
 
 
+@module_api_surface("learning")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -265,13 +281,14 @@ def _dashboard_company_ids(request, *, permission="training.view_training_dashbo
     user: User = request.user
     if user.is_superuser:
         requested = request.query_params.get("company")
-        return [requested] if requested else None
+        requested_ids = [requested] if requested else None
+        return entitled_company_ids(request, requested_ids, ("learning",))
     if permission not in access.get_effective_permissions(user):
         raise PermissionDenied("You do not have permission to view this training data.")
-    ids = access.get_fully_accessible_company_ids(user, permission=permission)
+    accessible_ids = access.get_fully_accessible_company_ids(user, permission=permission)
     requested = request.query_params.get("company")
     if requested:
-        if str(requested) not in {str(value) for value in ids}:
+        if str(requested) not in {str(value) for value in accessible_ids}:
             raise Http404
         return [requested]
-    return list(ids)
+    return entitled_company_ids(request, list(accessible_ids), ("learning",))

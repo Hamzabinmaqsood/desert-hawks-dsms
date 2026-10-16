@@ -14,6 +14,11 @@ from dsms.deployment.tenant_queries import consistent_employees
 from dsms.identity import access
 from dsms.identity.permissions import HasRBACPermission
 from dsms.incidents.exceptions import IncidentPermissionError, IncidentValidationError
+from dsms.subscriptions.api.enforcement import (
+    TenantModuleViewMixin,
+    entitled_company_ids,
+    module_api_surface,
+)
 from dsms.workforce.models import Employee
 
 from .. import models, services
@@ -38,12 +43,15 @@ def _service_call(function, **kwargs):
 
 
 class TenantConfigViewSet(
+    TenantModuleViewMixin,
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
+    required_module_ids = ("security_patrol",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
 
@@ -79,6 +87,7 @@ class TenantConfigViewSet(
         return {"company": company, "branch": branch}
 
     def perform_create(self, serializer: serializers.BaseSerializer) -> None:
+        self.require_modules_for(self._scope(serializer.validated_data).get("company"))
         if not access.has_permission(
             user=self.request.user,
             permission=self._permission("add"),
@@ -105,8 +114,13 @@ class TenantConfigViewSet(
 
 
 class ReadOnlyWorkflowViewSet(
-    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
 ):
+    required_module_ids = ("security_patrol",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "head", "options"]
 
@@ -183,6 +197,7 @@ class ExceptionViewSet(ReadOnlyWorkflowViewSet):
 
 
 class ReviewViewSet(ReadOnlyWorkflowViewSet):
+    module_company_lookup = "patrol_run__company_id"
     queryset = models.PatrolReview.objects.select_related("patrol_run__patrol_task", "reviewed_by")
     serializer_class = SERIALIZERS["PatrolReview"]
 
@@ -297,6 +312,7 @@ class EvidenceViewSet(ReadOnlyWorkflowViewSet):
     serializer_class = SERIALIZERS["PatrolEvidence"]
 
 
+@module_api_surface("security_patrol")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -306,26 +322,41 @@ def dashboard_summary(request):
         request.user
     ):
         raise PermissionDenied("Patrol dashboard permission is required.")
+    company_ids = entitled_company_ids(
+        request,
+        None
+        if request.user.is_superuser
+        else access.get_accessible_company_ids(request.user, permission=permission),
+        ("security_patrol",),
+    )
     today = timezone.localdate()
     tasks = scoped_queryset(
-        models.PatrolTask.objects.filter(scheduled_start_at__date=today),
+        models.PatrolTask.objects.filter(
+            scheduled_start_at__date=today, company_id__in=company_ids
+        ),
         user=request.user,
         permission=permission,
     )
     visits = scoped_queryset(
         models.CheckpointVisit.objects.filter(
-            created_at__date=today, overall_verification_result="FAILED"
+            created_at__date=today,
+            overall_verification_result="FAILED",
+            patrol_run__company_id__in=company_ids,
         ),
         user=request.user,
         permission=permission,
     )
     exceptions = scoped_queryset(
-        models.PatrolException.objects.filter(status__in=["OPEN", "ACKNOWLEDGED"]),
+        models.PatrolException.objects.filter(
+            status__in=["OPEN", "ACKNOWLEDGED"], company_id__in=company_ids
+        ),
         user=request.user,
         permission=permission,
     )
     observations = scoped_queryset(
-        models.PatrolObservation.objects.filter(severity="CRITICAL", observed_at__date=today),
+        models.PatrolObservation.objects.filter(
+            severity="CRITICAL", observed_at__date=today, company_id__in=company_ids
+        ),
         user=request.user,
         permission=permission,
     )

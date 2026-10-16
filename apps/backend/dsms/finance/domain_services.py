@@ -14,6 +14,8 @@ from dsms.documents.exceptions import DocumentValidationError
 from dsms.documents.validators import validate_upload
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.organization.models import Company
+from dsms.subscriptions.enforcement import require_company_module, requires_company_module
 
 from .enums import (
     ApprovalDecision,
@@ -72,10 +74,28 @@ from .vendor_bill_services import (
 ZERO = Decimal("0.00")
 
 
+def _finance_document_module(document_type: str) -> str:
+    if document_type in {ApprovalDocumentType.PAYROLL, ApprovalDocumentType.EMPLOYEE_ADVANCE}:
+        return "payroll"
+    if document_type in {
+        ApprovalDocumentType.PURCHASE_REQUISITION,
+        ApprovalDocumentType.PURCHASE_ORDER,
+        ApprovalDocumentType.VENDOR_BILL,
+        ApprovalDocumentType.PAYMENT_VOUCHER,
+    }:
+        return "procurement_payables"
+    return "finance_core"
+
+
+def _require_finance_document(obj: Any, document_type: str) -> None:
+    require_company_module(obj.company, _finance_document_module(document_type))
+
+
 @transaction.atomic
 def create_finance_attachment(
     *, company: Any, document_type: str, object_id: Any, upload: Any, actor: User
 ) -> FinanceAttachment:
+    require_company_module(company, _finance_document_module(document_type))
     try:
         _extension, content_type, size = validate_upload(upload, upload.name)
     except DocumentValidationError as exc:
@@ -147,6 +167,7 @@ def validate_vendor_payment_values(*, bill: VendorBill, amount: Decimal) -> None
 
 @transaction.atomic
 def apply_vendor_bill_payment(*, bill_id: Any, company_id: Any, amount: Decimal) -> VendorBill:
+    require_company_module(Company.objects.get(pk=company_id), "procurement_payables")
     amount = money(amount)
     bill = (
         VendorBill.objects.select_for_update(of=("self",))
@@ -211,6 +232,7 @@ def _document_amount(obj: Any) -> Decimal:
 
 @transaction.atomic
 def submit_finance_document(*, obj: Any, actor: User, document_type: str) -> Any:
+    _require_finance_document(obj, document_type)
     locked = type(obj).objects.select_for_update().get(pk=obj.pk)
     if locked.status != WorkflowStatus.DRAFT:
         raise InvalidFinanceTransitionError("Only a draft transaction can be submitted.")
@@ -224,6 +246,7 @@ def submit_finance_document(*, obj: Any, actor: User, document_type: str) -> Any
 
 @transaction.atomic
 def approve_finance_document(*, obj: Any, actor: User, document_type: str) -> Any:
+    _require_finance_document(obj, document_type)
     locked = type(obj).objects.select_for_update().get(pk=obj.pk)
     if locked.status != WorkflowStatus.SUBMITTED:
         raise InvalidFinanceTransitionError("Only a submitted transaction can be approved.")
@@ -273,6 +296,7 @@ def approve_finance_document(*, obj: Any, actor: User, document_type: str) -> An
 
 @transaction.atomic
 def reject_finance_document(*, obj: Any, actor: User, document_type: str, reason: str) -> Any:
+    _require_finance_document(obj, document_type)
     if not reason.strip():
         raise FinanceValidationError({"reason": ["A rejection reason is required."]})
     locked = type(obj).objects.select_for_update().get(pk=obj.pk)
@@ -320,6 +344,7 @@ def _compensation_for(employee_id: Any, on_date: date) -> EmployeeCompensation:
 
 
 @transaction.atomic
+@requires_company_module("payroll", argument="payroll_run")
 def calculate_payroll(*, payroll_run: PayrollRun) -> PayrollRun:
     run = (
         PayrollRun.objects.select_for_update()
@@ -437,6 +462,7 @@ def calculate_payroll(*, payroll_run: PayrollRun) -> PayrollRun:
 
 
 @transaction.atomic
+@requires_company_module("payroll", argument="payroll_run")
 def post_payroll(*, payroll_run: PayrollRun, actor: User) -> PayrollRun:
     run = PayrollRun.objects.select_for_update().get(pk=payroll_run.pk)
     if run.journal_entry_id:
@@ -528,6 +554,7 @@ def post_payroll(*, payroll_run: PayrollRun, actor: User) -> PayrollRun:
 
 
 @transaction.atomic
+@requires_company_module("payroll", argument="payroll_run")
 def create_payroll_payment_batch(*, payroll_run: PayrollRun, actor: User) -> PayrollPaymentBatch:
     run = PayrollRun.objects.select_for_update().get(pk=payroll_run.pk)
     if run.status != WorkflowStatus.POSTED:
@@ -552,6 +579,7 @@ def create_payroll_payment_batch(*, payroll_run: PayrollRun, actor: User) -> Pay
 
 
 @transaction.atomic
+@requires_company_module("payroll", argument="item")
 def mark_payroll_item_paid(*, item: PayrollPaymentItem, reference: str) -> PayrollPaymentItem:
     locked = (
         PayrollPaymentItem.objects.select_for_update()
@@ -574,6 +602,7 @@ def mark_payroll_item_paid(*, item: PayrollPaymentItem, reference: str) -> Payro
 
 
 @transaction.atomic
+@requires_company_module("payroll", argument="payroll_run")
 def close_payroll(*, payroll_run: PayrollRun) -> PayrollRun:
     run = PayrollRun.objects.select_for_update().get(pk=payroll_run.pk)
     if run.status == WorkflowStatus.CLOSED:
@@ -590,6 +619,7 @@ def close_payroll(*, payroll_run: PayrollRun) -> PayrollRun:
 
 
 @transaction.atomic
+@requires_company_module("payroll", argument="item")
 def approve_payroll_variable_input(
     *, item: PayrollVariableInput, actor: User
 ) -> PayrollVariableInput:
@@ -604,6 +634,7 @@ def approve_payroll_variable_input(
 
 
 @transaction.atomic
+@requires_company_module("payroll", argument="advance")
 def recover_employee_advance(
     *,
     advance: EmployeeAdvance,
@@ -631,6 +662,7 @@ def recover_employee_advance(
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="receipt")
 def confirm_receipt(*, receipt: PurchaseReceipt) -> PurchaseReceipt:
     locked = (
         PurchaseReceipt.objects.select_for_update(of=("self",))
@@ -765,6 +797,7 @@ def _validate_vendor_bill_for_workflow(bill: VendorBill) -> list[Any]:
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="bill")
 def submit_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
     locked = (
         VendorBill.objects.select_for_update(of=("self",))
@@ -787,6 +820,7 @@ def submit_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="bill")
 def approve_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
     locked = (
         VendorBill.objects.select_for_update(of=("self",))
@@ -805,6 +839,7 @@ def approve_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="bill")
 def reject_vendor_bill(*, bill: VendorBill, actor: User, reason: str) -> VendorBill:
     locked = VendorBill.objects.select_for_update().get(pk=bill.pk)
     _maker_checker(locked.created_by_id, actor)
@@ -820,6 +855,7 @@ def reject_vendor_bill(*, bill: VendorBill, actor: User, reason: str) -> VendorB
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="bill")
 def post_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
     locked = (
         VendorBill.objects.select_for_update(of=("self",))
@@ -858,6 +894,7 @@ def post_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="bill")
 def approve_and_post_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill:
     current = VendorBill.objects.get(pk=bill.pk)
     if current.status == WorkflowStatus.POSTED and current.journal_entry_id:
@@ -869,6 +906,7 @@ def approve_and_post_vendor_bill(*, bill: VendorBill, actor: User) -> VendorBill
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="expense")
 def approve_and_post_expense(
     *, expense: CompanyExpense, actor: User, payable_account: Account
 ) -> CompanyExpense:
@@ -918,6 +956,7 @@ def approve_and_post_expense(
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="claim")
 def approve_and_post_expense_claim(
     *, claim: ExpenseClaim, actor: User, reimbursement_payable: Account
 ) -> ExpenseClaim:
@@ -973,6 +1012,7 @@ def approve_and_post_expense_claim(
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="transfer")
 def post_fund_transfer(*, transfer: FundTransfer, actor: User) -> FundTransfer:
     locked = FundTransfer.objects.select_for_update().get(pk=transfer.pk)
     if locked.journal_entry_id:
@@ -1022,6 +1062,7 @@ def _validate_vendor_payment_voucher(voucher: PaymentVoucher) -> None:
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="voucher")
 def submit_vendor_payment(*, voucher: PaymentVoucher, actor: User) -> PaymentVoucher:
     locked = PaymentVoucher.objects.select_for_update(of=("self",)).get(pk=voucher.pk)
     _validate_vendor_payment_voucher(locked)
@@ -1034,6 +1075,7 @@ def submit_vendor_payment(*, voucher: PaymentVoucher, actor: User) -> PaymentVou
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="voucher")
 def approve_vendor_payment(*, voucher: PaymentVoucher, actor: User) -> PaymentVoucher:
     locked = PaymentVoucher.objects.select_for_update(of=("self",)).get(pk=voucher.pk)
     _validate_vendor_payment_voucher(locked)
@@ -1046,6 +1088,7 @@ def approve_vendor_payment(*, voucher: PaymentVoucher, actor: User) -> PaymentVo
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="voucher")
 def reject_vendor_payment(*, voucher: PaymentVoucher, actor: User, reason: str) -> PaymentVoucher:
     locked = PaymentVoucher.objects.select_for_update(of=("self",)).get(pk=voucher.pk)
     _maker_checker(locked.created_by_id, actor)
@@ -1061,6 +1104,7 @@ def reject_vendor_payment(*, voucher: PaymentVoucher, actor: User, reason: str) 
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="voucher")
 def pay_vendor_voucher(
     *, voucher: PaymentVoucher, actor: User, cash_account: Account, reference: str
 ) -> PaymentVoucher:
@@ -1114,6 +1158,7 @@ def pay_vendor_voucher(
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="fund")
 def record_petty_cash(
     *,
     fund: PettyCashFund,
@@ -1160,6 +1205,7 @@ def petty_cash_balance(*, fund: PettyCashFund) -> Decimal:
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="bank_account")
 def import_bank_csv(*, bank_account: BankAccount, content: bytes, actor: User) -> BankStatement:
     digest = hashlib.sha256(content).hexdigest()
     if BankStatement.objects.filter(import_hash=digest).exists():
@@ -1209,7 +1255,12 @@ def import_bank_csv(*, bank_account: BankAccount, content: bytes, actor: User) -
 def reconcile_bank_line(
     *, line: BankStatementLine, journal: JournalEntry, actor: User
 ) -> BankStatementLine:
-    locked = BankStatementLine.objects.select_for_update().get(pk=line.pk)
+    locked = (
+        BankStatementLine.objects.select_for_update()
+        .select_related("statement__bank_account__company")
+        .get(pk=line.pk)
+    )
+    require_company_module(locked.statement.bank_account.company, "finance_core")
     if locked.status == ReconciliationStatus.MATCHED:
         return locked
     if journal.status != "POSTED" or journal.company_id != locked.statement.bank_account.company_id:
@@ -1230,7 +1281,12 @@ def reconcile_bank_line(
 def classify_bank_line(*, line: BankStatementLine, status: str, actor: User) -> BankStatementLine:
     if status not in [ReconciliationStatus.IGNORED, ReconciliationStatus.EXCEPTION]:
         raise FinanceValidationError({"status": ["Only ignored or exception is allowed here."]})
-    locked = BankStatementLine.objects.select_for_update().get(pk=line.pk)
+    locked = (
+        BankStatementLine.objects.select_for_update()
+        .select_related("statement__bank_account__company")
+        .get(pk=line.pk)
+    )
+    require_company_module(locked.statement.bank_account.company, "finance_core")
     if locked.status == ReconciliationStatus.MATCHED:
         raise InvalidFinanceTransitionError("A matched bank line cannot be reclassified.")
     locked.status = status
@@ -1241,6 +1297,7 @@ def classify_bank_line(*, line: BankStatementLine, status: str, actor: User) -> 
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="budget")
 def approve_budget(*, budget: Budget, actor: User) -> Budget:
     result: Budget = approve_finance_document(
         obj=budget, actor=actor, document_type=ApprovalDocumentType.BUDGET

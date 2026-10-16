@@ -24,6 +24,7 @@ from dsms.incidents.tenant_queries import (
     scoped_incidents,
     user_belongs_to_company,
 )
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 from dsms.workforce.models import Employee
 
 from .serializers import (
@@ -50,7 +51,9 @@ def _service_call(callable_, **kwargs):
         raise ValidationError(str(exc)) from exc
 
 
-class NoDeleteViewSet(viewsets.ModelViewSet):
+class NoDeleteViewSet(TenantModuleViewMixin, viewsets.ModelViewSet):
+    required_module_ids = ("security_incidents",)
+    module_company_lookup = "company_id"
     http_method_names = ["get", "post", "patch", "head", "options"]
 
 
@@ -252,7 +255,14 @@ class IncidentViewSet(NoDeleteViewSet):
         return Response({"id": str(item.id), "escalation_type": item.escalation_type}, status=201)
 
 
-class SOSViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class SOSViewSet(
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    required_module_ids = ("security_incidents",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated]
     queryset = SOSAlert.objects.select_related("employee__branch", "site", "linked_incident")
     serializer_class = SOSSerializer
@@ -349,7 +359,11 @@ class SOSViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Gene
         return Response(self.get_serializer(sos).data)
 
 
-class CommandCenterQueueViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+class CommandCenterQueueViewSet(
+    TenantModuleViewMixin, mixins.ListModelMixin, viewsets.GenericViewSet
+):
+    required_module_ids = ("security_incidents",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     custom_action_permissions = {"list": "incidents.view_incident_dashboard"}
     serializer_class = IncidentListSerializer
@@ -364,7 +378,14 @@ class CommandCenterQueueViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return services.command_center_queue(queryset)
 
 
-class EvidenceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class EvidenceViewSet(
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    required_module_ids = ("security_incidents",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     serializer_class = EvidenceSerializer
     queryset = IncidentEvidence.objects.select_related(

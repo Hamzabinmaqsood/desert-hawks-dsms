@@ -15,6 +15,11 @@ from dsms.identity import access
 from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission
 from dsms.organization.models import Company
+from dsms.subscriptions.api.enforcement import (
+    TenantModuleViewMixin,
+    entitled_company_ids,
+    module_api_surface,
+)
 
 from .. import models, selectors, services
 from . import security
@@ -22,15 +27,20 @@ from .serializers import SERIALIZERS
 
 
 class NoDeleteViewSet(
+    TenantModuleViewMixin,
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
+    required_module_ids = ("client_contracts",)
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
     model: type
+
+    def get_module_company_lookup(self):
+        return security.COMPANY_PATHS[self.model]
 
     def get_scope_permission(self):
         custom = getattr(self, "custom_action_permissions", {}).get(self.action)
@@ -51,6 +61,7 @@ class NoDeleteViewSet(
         )
 
     def _guard_write(self, candidate):
+        self.require_modules_for(candidate)
         user = cast(User, self.request.user)
         company_id = security.company_id_for(candidate)
         if company_id is None:
@@ -91,6 +102,17 @@ def basic_viewset(model: type) -> type[NoDeleteViewSet]:
 
     ViewSet.__name__ = f"{model.__name__}ViewSet"
     ViewSet.model = model
+    if model in {
+        models.SiteType,
+        models.SiteContact,
+        models.SiteOperationalProfile,
+        models.SiteEscalationContact,
+        models.SiteCalendarException,
+        models.PostType,
+        models.PostQualificationRequirement,
+        models.PostCredentialRequirement,
+    }:
+        ViewSet.required_module_ids = ("security_operations",)
     if model is models.ContractAmendment:
         ViewSet.http_method_names = ["get", "head", "options"]
     return ViewSet
@@ -143,6 +165,7 @@ class ContractViewSet(NoDeleteViewSet):
 
 
 class SiteViewSet(NoDeleteViewSet):
+    required_module_ids = ("security_operations",)
     model = models.SecuritySite
     queryset = selectors.security_site_list()
     serializer_class = SERIALIZERS["SecuritySite"]
@@ -156,6 +179,7 @@ class SiteViewSet(NoDeleteViewSet):
 
 
 class PostViewSet(NoDeleteViewSet):
+    required_module_ids = ("security_operations",)
     model = models.SecurityPost
     queryset = models.SecurityPost.objects.select_related("site", "company", "client")
     serializer_class = SERIALIZERS["SecurityPost"]
@@ -169,6 +193,7 @@ class PostViewSet(NoDeleteViewSet):
 
 
 class StaffingViewSet(NoDeleteViewSet):
+    required_module_ids = ("security_operations",)
     model = models.StaffingRequirement
     queryset = selectors.staffing_requirement_list()
     serializer_class = SERIALIZERS["StaffingRequirement"]
@@ -199,29 +224,38 @@ PostCredentialViewSet = basic_viewset(models.PostCredentialRequirement)
 SLAViewSet = basic_viewset(models.ServiceLevelAgreement)
 
 
+@module_api_surface("client_contracts")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def dashboard_summary(request):
     return Response(
-        selectors.contract_dashboard_summary(company_ids=_dashboard_company_ids(request))
+        selectors.contract_dashboard_summary(
+            company_ids=_dashboard_company_ids(request, ("client_contracts",))
+        )
     )
 
 
+@module_api_surface("security_operations")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def staffing_demand_summary(request):
     return Response(
-        selectors.contractual_demand_summary(company_ids=_dashboard_company_ids(request))
+        selectors.contractual_demand_summary(
+            company_ids=_dashboard_company_ids(request, ("security_operations",))
+        )
     )
 
 
+@module_api_surface("security_operations")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def exception_center(request):
-    summary = selectors.contract_dashboard_summary(company_ids=_dashboard_company_ids(request))
+    summary = selectors.contract_dashboard_summary(
+        company_ids=_dashboard_company_ids(request, ("security_operations",))
+    )
     return Response(
         [
             {
@@ -238,18 +272,19 @@ def exception_center(request):
     )
 
 
-def _dashboard_company_ids(request):
+def _dashboard_company_ids(request, module_ids):
     user: User = request.user
     permission = "contracts.view_servicecontract"
     if user.is_superuser:
         requested = request.query_params.get("company")
-        return [requested] if requested else None
+        requested_ids = [requested] if requested else None
+        return entitled_company_ids(request, requested_ids, module_ids)
     if permission not in access.get_effective_permissions(user):
         raise PermissionDenied("You do not have permission to view Contract data.")
-    ids = access.get_fully_accessible_company_ids(user, permission=permission)
+    accessible_ids = access.get_fully_accessible_company_ids(user, permission=permission)
     requested = request.query_params.get("company")
     if requested:
-        if str(requested) not in {str(value) for value in ids}:
+        if str(requested) not in {str(value) for value in accessible_ids}:
             raise Http404
         return [requested]
-    return list(ids)
+    return entitled_company_ids(request, list(accessible_ids), module_ids)

@@ -36,13 +36,24 @@ class AnalyticsMetricProvider(Protocol):
 class MetricProviderRegistry:
     def __init__(self) -> None:
         self._providers: dict[str, AnalyticsMetricProvider] = {}
+        self._source_modules: dict[str, str] = {}
 
-    def register(self, code: str, provider: AnalyticsMetricProvider) -> None:
-        self._providers[code.strip().lower()] = provider
+    def register(
+        self, code: str, provider: AnalyticsMetricProvider, *, source_module_id: str
+    ) -> None:
+        normalized = code.strip().lower()
+        self._providers[normalized] = provider
+        self._source_modules[normalized] = source_module_id
 
     def get(self, code: str) -> AnalyticsMetricProvider:
         try:
             return self._providers[code.strip().lower()]
+        except KeyError as exc:
+            raise LookupError(f"Analytics provider {code!r} is not allowlisted.") from exc
+
+    def source_module_id(self, code: str) -> str:
+        try:
+            return self._source_modules[code.strip().lower()]
         except KeyError as exc:
             raise LookupError(f"Analytics provider {code!r} is not allowlisted.") from exc
 
@@ -195,7 +206,15 @@ def _missing(period_start: date, period_end: date, warning: str) -> AnalyticsMet
 
 from django.db import models  # noqa: E402
 
-registry.register("workforce.total_employees", WorkforceHeadcountProvider())
-registry.register("finance.invoice_value", InvoiceValueProvider())
-registry.register("finance.collections", CollectionsProvider())
-registry.register("finance.outstanding_ar", OutstandingARProvider())
+registry.register(
+    "workforce.total_employees", WorkforceHeadcountProvider(), source_module_id="people"
+)
+registry.register(
+    "finance.invoice_value", InvoiceValueProvider(), source_module_id="billing_receivables"
+)
+registry.register(
+    "finance.collections", CollectionsProvider(), source_module_id="billing_receivables"
+)
+registry.register(
+    "finance.outstanding_ar", OutstandingARProvider(), source_module_id="billing_receivables"
+)

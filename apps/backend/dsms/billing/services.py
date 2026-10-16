@@ -23,6 +23,7 @@ from dsms.finance.services import (
     submit_journal,
 )
 from dsms.organization.business_defaults import company_local_date
+from dsms.subscriptions.enforcement import requires_company_module
 
 from .api.security import consistent_queryset
 from .enums import (
@@ -216,6 +217,7 @@ def _generate_invoice_document(invoice: ClientInvoice, actor: Any) -> ClientInvo
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="profile")
 def create_invoice(
     *,
     profile: ClientBillingProfile,
@@ -418,6 +420,7 @@ def _recalculate_invoice(invoice: ClientInvoice) -> None:
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="invoice")
 def update_invoice_draft(
     *, invoice: ClientInvoice, actor: Any, values: dict[str, Any]
 ) -> ClientInvoice:
@@ -445,6 +448,7 @@ def update_invoice_draft(
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="invoice")
 def add_invoice_line(
     *, invoice: ClientInvoice, actor: Any, values: dict[str, Any]
 ) -> ClientInvoiceLine:
@@ -462,6 +466,7 @@ def add_invoice_line(
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="invoice")
 def update_invoice_line(
     *, invoice: ClientInvoice, line: ClientInvoiceLine, actor: Any, values: dict[str, Any]
 ) -> ClientInvoiceLine:
@@ -500,6 +505,7 @@ def update_invoice_line(
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="invoice")
 def delete_invoice_line(*, invoice: ClientInvoice, line: ClientInvoiceLine, actor: Any) -> None:
     item = ClientInvoice.objects.select_for_update().get(pk=invoice.pk)
     if item.status != InvoiceStatus.DRAFT:
@@ -510,6 +516,7 @@ def delete_invoice_line(*, invoice: ClientInvoice, line: ClientInvoiceLine, acto
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="invoice")
 def submit_invoice(*, invoice: ClientInvoice) -> ClientInvoice:
     locked = ClientInvoice.objects.select_for_update().get(pk=invoice.pk)
     if locked.status != InvoiceStatus.DRAFT or not locked.lines.exists():
@@ -520,6 +527,7 @@ def submit_invoice(*, invoice: ClientInvoice) -> ClientInvoice:
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="invoice")
 def approve_invoice(*, invoice: ClientInvoice, actor: Any) -> ClientInvoice:
     locked = ClientInvoice.objects.select_for_update().get(pk=invoice.pk)
     if locked.status != InvoiceStatus.UNDER_REVIEW:
@@ -543,6 +551,7 @@ def approve_invoice(*, invoice: ClientInvoice, actor: Any) -> ClientInvoice:
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="invoice")
 def issue_invoice(*, invoice: ClientInvoice, actor: Any) -> ClientInvoice:
     locked = (
         ClientInvoice.objects.select_for_update(of=("self",))
@@ -623,6 +632,7 @@ def issue_invoice(*, invoice: ClientInvoice, actor: Any) -> ClientInvoice:
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="receipt")
 def confirm_receipt(*, receipt: ClientReceipt, actor: Any) -> ClientReceipt:
     locked = (
         ClientReceipt.objects.select_for_update(of=("self",))
@@ -683,6 +693,7 @@ def confirm_receipt(*, receipt: ClientReceipt, actor: Any) -> ClientReceipt:
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="receipt")
 def allocate_receipt(
     *, receipt: ClientReceipt, invoice: ClientInvoice, amount: Decimal, actor: Any
 ) -> ClientReceiptAllocation:
@@ -751,6 +762,7 @@ def allocate_receipt(
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="invoice")
 def create_credit_note(
     *, invoice: ClientInvoice, actor: Any, reason: str, lines: list[dict[str, Any]]
 ) -> ClientCreditNote:
@@ -801,6 +813,7 @@ def create_credit_note(
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="note")
 def approve_credit_note(*, note: ClientCreditNote, actor: Any) -> ClientCreditNote:
     item = cast(
         ClientCreditNote,
@@ -817,6 +830,7 @@ def approve_credit_note(*, note: ClientCreditNote, actor: Any) -> ClientCreditNo
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="note")
 def issue_credit_note(*, note: ClientCreditNote, actor: Any) -> ClientCreditNote:
     item = cast(
         ClientCreditNote,
@@ -887,6 +901,7 @@ def issue_credit_note(*, note: ClientCreditNote, actor: Any) -> ClientCreditNote
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="profile")
 def create_debit_note(
     *,
     profile: ClientBillingProfile,
@@ -941,6 +956,7 @@ def create_debit_note(
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="note")
 def approve_debit_note(*, note: ClientDebitNote, actor: Any) -> ClientDebitNote:
     item = cast(
         ClientDebitNote,
@@ -957,6 +973,7 @@ def approve_debit_note(*, note: ClientDebitNote, actor: Any) -> ClientDebitNote:
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="note")
 def issue_debit_note(*, note: ClientDebitNote, actor: Any) -> ClientDebitNote:
     item = cast(
         ClientDebitNote,
@@ -1026,6 +1043,7 @@ def issue_debit_note(*, note: ClientDebitNote, actor: Any) -> ClientDebitNote:
 
 
 @transaction.atomic
+@requires_company_module("billing_receivables", argument="receipt")
 def reverse_receipt(*, receipt: ClientReceipt, actor: Any, reason: str) -> ClientReceiptReversal:
     item = (
         ClientReceipt.objects.select_for_update(of=("self",))
@@ -1097,11 +1115,16 @@ def reverse_receipt(*, receipt: ClientReceipt, actor: Any, reason: str) -> Clien
 
 @transaction.atomic
 def generate_due_draft_invoices(*, as_of: date, actor: Any) -> int:
+    from dsms.subscriptions.enforcement import company_ids_with_module
+
     from .models import BillingSchedule
 
     created = 0
     for schedule in BillingSchedule.objects.select_for_update(of=("self",)).filter(
-        is_active=True, auto_generate_draft=True, next_billing_date__lte=as_of
+        company_id__in=company_ids_with_module("billing_receivables"),
+        is_active=True,
+        auto_generate_draft=True,
+        next_billing_date__lte=as_of,
     ):
         billing_date = schedule.next_billing_date
         assert billing_date is not None
@@ -1144,10 +1167,12 @@ def generate_due_draft_invoices(*, as_of: date, actor: Any) -> int:
 def create_overdue_collection_reminders(*, as_of: date, actor: Any) -> int:
     """Queue one internal, privacy-safe reminder per overdue invoice and day."""
     from dsms.notifications.services import publish_notification_event
+    from dsms.subscriptions.enforcement import company_ids_with_module
 
     created = 0
     now = timezone.now()
     invoices = ClientInvoice.objects.filter(
+        company_id__in=company_ids_with_module("billing_receivables"),
         due_date__lt=as_of,
         balance_due__gt=0,
         status__in=[InvoiceStatus.ISSUED, InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.DISPUTED],

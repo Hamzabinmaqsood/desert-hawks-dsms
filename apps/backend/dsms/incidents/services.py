@@ -23,6 +23,7 @@ from dsms.patrol.tenant_queries import (
     consistent_observations,
     consistent_runs,
 )
+from dsms.subscriptions.enforcement import requires_company_module
 
 from .exceptions import IncidentPermissionError, IncidentValidationError
 from .models import (
@@ -125,6 +126,7 @@ def _locked_sos(pk):
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="company")
 def create_incident(
     *,
     actor,
@@ -207,6 +209,7 @@ def create_incident(
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="employee")
 def trigger_sos(
     *, actor, employee, client_event_id, location=None, message=None, device_metadata=None
 ):
@@ -372,6 +375,7 @@ def _sos_type(company):
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="sos")
 def create_incident_from_sos(*, sos, actor):
     sos = (
         consistent_sos_alerts(SOSAlert.objects.select_for_update(of=("self",)))
@@ -448,6 +452,7 @@ def create_incident_from_sos(*, sos, actor):
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="sos")
 def acknowledge_sos(*, sos: SOSAlert, actor):
     item = _locked_sos(sos.pk)
     _require_permission(
@@ -494,6 +499,7 @@ def acknowledge_sos(*, sos: SOSAlert, actor):
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="sos")
 def resolve_sos(*, sos: SOSAlert, actor, reason: str):
     item = _locked_sos(sos.pk)
     _require_permission(
@@ -530,6 +536,7 @@ def resolve_sos(*, sos: SOSAlert, actor, reason: str):
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="incident")
 def assign_incident_responder(
     *, incident: Incident, actor, employee=None, user=None, responder_role="OTHER"
 ) -> IncidentResponder:
@@ -567,6 +574,7 @@ def assign_incident_responder(
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="incident")
 def add_incident_action(
     *,
     incident: Incident,
@@ -614,6 +622,7 @@ def add_incident_action(
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="incident")
 def escalate_incident(*, incident: Incident, actor, escalation_type="MANUAL", reason=""):
     obj = _locked_incident(incident.pk)
     _require_permission(
@@ -661,6 +670,7 @@ def _referral_type(company):
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="finding")
 def refer_supervision_finding_to_incident(*, finding, actor, reason):
     from dsms.supervision.models import InspectionFinding
     from dsms.supervision.tenant_queries import consistent_findings
@@ -728,6 +738,7 @@ def refer_supervision_finding_to_incident(*, finding, actor, reason):
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="exception")
 def refer_patrol_exception_to_incident(*, exception, actor, reason):
     exception = (
         consistent_exceptions(
@@ -792,6 +803,7 @@ def refer_patrol_exception_to_incident(*, exception, actor, reason):
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="observation")
 def refer_patrol_observation_to_incident(*, observation, actor, reason):
     observation = (
         consistent_observations(
@@ -846,6 +858,7 @@ def refer_patrol_observation_to_incident(*, observation, actor, reason):
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="sos")
 def cancel_own_sos(*, actor, sos, reason):
     locked = _locked_sos(sos.pk)
     if locked.employee.user_id != actor.id:
@@ -889,6 +902,7 @@ TRANSITIONS = {
 
 
 @transaction.atomic
+@requires_company_module("security_incidents", argument="incident")
 def transition_incident(*, incident, actor, new_status, summary=""):
     obj = _locked_incident(incident.pk)
     permission = {

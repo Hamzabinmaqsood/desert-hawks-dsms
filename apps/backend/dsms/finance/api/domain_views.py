@@ -20,6 +20,9 @@ from dsms.organization.business_defaults import (
     normalize_currency_code,
     validate_currency_code,
 )
+from dsms.organization.models import Company
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
+from dsms.subscriptions.enforcement import require_company_module
 
 from .. import domain_selectors, domain_services
 from ..enums import ApprovalDocumentType, WorkflowStatus
@@ -166,10 +169,11 @@ class FinanceResponseSerializer(serializers.Serializer[Any]):
     """Schema marker for heterogeneous Finance workflow payloads."""
 
 
-class FinanceAPIView(APIView):
+class FinanceAPIView(TenantModuleViewMixin, APIView):
     """Schema-aware base for Finance endpoints with heterogeneous payloads."""
 
     serializer_class = FinanceResponseSerializer
+    required_module_ids: tuple[str, ...] = ("finance_core",)
 
 
 class IsPlatformFinanceAdmin(BasePermission):
@@ -181,6 +185,7 @@ class IsPlatformFinanceAdmin(BasePermission):
 
 
 class DomainCollectionView(FinanceAPIView):
+    required_module_ids = ()
     permission_classes = [IsPlatformFinanceAdmin]
 
     def _context(self, request: Request, resource: str) -> tuple[type[models.Model], str, set[Any]]:
@@ -265,6 +270,7 @@ class DomainCollectionView(FinanceAPIView):
 
 
 class DomainDetailView(FinanceAPIView):
+    required_module_ids = ()
     permission_classes = [IsPlatformFinanceAdmin]
 
     @extend_schema(operation_id="finance_domain_detail_retrieve")
@@ -293,6 +299,7 @@ class DashboardView(FinanceAPIView):
         )
         if not company or company not in {str(item) for item in ids}:
             raise PermissionDenied()
+        require_company_module(Company.objects.get(pk=company), "finance_core", request=request)
         summary = domain_selectors.dashboard_summary(company_id=company)
         if section == "exceptions":
             return Response(domain_selectors.finance_exceptions(company_id=company))
@@ -312,6 +319,8 @@ class ReportView(FinanceAPIView):
         )
         if not company or company not in {str(item) for item in ids}:
             raise PermissionDenied()
+        required_module = "procurement_payables" if report == "ap-aging" else "finance_core"
+        require_company_module(Company.objects.get(pk=company), required_module, request=request)
         if report == "profit-and-loss":
             return Response(
                 domain_selectors.profit_and_loss(
@@ -359,6 +368,7 @@ class ApprovalInboxView(FinanceAPIView):
         )
         if not company or company not in {str(item) for item in ids}:
             raise PermissionDenied()
+        require_company_module(Company.objects.get(pk=company), "finance_core", request=request)
         submitted = FinanceApprovalHistory.objects.filter(
             company_id=company, decision="SUBMITTED"
         ).exclude(
@@ -370,6 +380,7 @@ class ApprovalInboxView(FinanceAPIView):
 
 
 class PayrollActionView(FinanceAPIView):
+    required_module_ids = ("payroll",)
     permission_classes = [FinancePermission]
     permission_code = "finance.manage_payroll"
 
@@ -379,6 +390,7 @@ class PayrollActionView(FinanceAPIView):
             user=cast(User, request.user), permission=self.permission_code, company=run.company
         ):
             raise PermissionDenied()
+        require_company_module(run.company, "payroll", request=request)
         try:
             if action == "calculate":
                 result = domain_services.calculate_payroll(payroll_run=run)
@@ -408,6 +420,7 @@ class PayrollActionView(FinanceAPIView):
 
 
 class FinanceActionView(FinanceAPIView):
+    required_module_ids = ()
     permission_classes = [IsPlatformFinanceAdmin]
 
     @extend_schema(operation_id="finance_domain_action_execute")
@@ -528,6 +541,7 @@ class BankImportView(FinanceAPIView):
             user=cast(User, request.user), permission=self.permission_code, company=bank.company
         ):
             raise PermissionDenied()
+        require_company_module(bank.company, "finance_core", request=request)
         upload = request.FILES.get("file")
         if upload is None:
             raise ValidationError({"file": ["CSV file is required."]})
@@ -552,6 +566,7 @@ class BankReconcileView(FinanceAPIView):
             company=line.statement.bank_account.company,
         ):
             raise PermissionDenied()
+        require_company_module(line.statement.bank_account.company, "finance_core", request=request)
         try:
             if action == "match":
                 result = domain_services.reconcile_bank_line(
@@ -579,13 +594,12 @@ class FinanceAttachmentView(FinanceAPIView):
     permission_code = "finance.manage_finance_attachments"
 
     def post(self, request: Request) -> Response:
-        from dsms.organization.models import Company
-
         company = Company.objects.get(pk=str(request.data.get("company")))
         if not access.has_permission(
             user=cast(User, request.user), permission=self.permission_code, company=company
         ):
             raise PermissionDenied()
+        require_company_module(company, "finance_core", request=request)
         upload = request.FILES.get("file")
         if upload is None:
             raise ValidationError({"file": ["Attachment is required."]})
@@ -610,6 +624,7 @@ class FinanceAttachmentView(FinanceAPIView):
             user=cast(User, request.user), permission=self.permission_code, company=item.company
         ):
             raise PermissionDenied()
+        require_company_module(item.company, "finance_core", request=request)
         response = FileResponse(item.file.open("rb"), content_type=item.content_type)
         response["Content-Disposition"] = f'attachment; filename="{item.original_filename}"'
         response["Cache-Control"] = "private, no-store"

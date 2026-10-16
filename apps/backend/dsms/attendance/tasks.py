@@ -2,6 +2,8 @@
 from celery import shared_task
 from django.utils import timezone
 
+from dsms.subscriptions.enforcement import company_ids_with_module
+
 from .models import AttendanceException, AttendanceRecord
 from .tenant_queries import consistent_attendance_records
 
@@ -12,6 +14,7 @@ def detect_attendance_missing_checkout() -> int:
     created = 0
     records = consistent_attendance_records(
         AttendanceRecord.objects.filter(
+            company_id__in=company_ids_with_module("attendance"),
             actual_check_in_at__isnull=False,
             actual_check_out_at__isnull=True,
             scheduled_end_at__lt=now,

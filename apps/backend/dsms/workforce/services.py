@@ -16,6 +16,7 @@ from django.db import IntegrityError, models, transaction
 
 from dsms.identity.models import User
 from dsms.organization.models import Branch, Company, Department, Designation
+from dsms.subscriptions.enforcement import requires_company_module
 
 from .enums import EmploymentStatus, Gender, MaritalStatus
 from .exceptions import (
@@ -113,6 +114,7 @@ def _validate_org_consistency(
 # --------------------------------------------------------------------------
 
 
+@requires_company_module("people", argument="company")
 def create_employee(
     *,
     actor: User,
@@ -190,6 +192,7 @@ def create_employee(
     return employee
 
 
+@requires_company_module("people", argument="employee")
 def update_employee_personal_details(*, employee: Employee, **fields: Any) -> Employee:
     with transaction.atomic():
         _apply_fields(employee, fields)
@@ -197,6 +200,7 @@ def update_employee_personal_details(*, employee: Employee, **fields: Any) -> Em
     return employee
 
 
+@requires_company_module("people", argument="employee")
 def update_employee_contact_details(*, employee: Employee, **fields: Any) -> Employee:
     with transaction.atomic():
         _apply_fields(employee, fields)
@@ -204,6 +208,7 @@ def update_employee_contact_details(*, employee: Employee, **fields: Any) -> Emp
     return employee
 
 
+@requires_company_module("people", argument="employee")
 def change_employee_organization(
     *,
     employee: Employee,
@@ -323,6 +328,7 @@ def _change_employee_status(
     return employee
 
 
+@requires_company_module("people", argument="employee")
 def activate_employee(
     *, employee: Employee, effective_date: date, changed_by: User, reason: str = ""
 ) -> Employee:
@@ -336,6 +342,7 @@ def activate_employee(
     )
 
 
+@requires_company_module("people", argument="employee")
 def place_employee_on_leave(
     *, employee: Employee, effective_date: date, changed_by: User, reason: str = ""
 ) -> Employee:
@@ -349,6 +356,7 @@ def place_employee_on_leave(
     )
 
 
+@requires_company_module("people", argument="employee")
 def return_employee_from_leave(
     *, employee: Employee, effective_date: date, changed_by: User, reason: str = ""
 ) -> Employee:
@@ -362,6 +370,7 @@ def return_employee_from_leave(
     )
 
 
+@requires_company_module("people", argument="employee")
 def suspend_employee(
     *, employee: Employee, effective_date: date, changed_by: User, reason: str = ""
 ) -> Employee:
@@ -375,6 +384,7 @@ def suspend_employee(
     )
 
 
+@requires_company_module("people", argument="employee")
 def reinstate_employee(
     *, employee: Employee, effective_date: date, changed_by: User, reason: str = ""
 ) -> Employee:
@@ -393,6 +403,7 @@ _TERMINAL_SOURCE_STATUSES = frozenset(
 )
 
 
+@requires_company_module("people", argument="employee")
 def resign_employee(
     *,
     employee: Employee,
@@ -412,6 +423,7 @@ def resign_employee(
     )
 
 
+@requires_company_module("people", argument="employee")
 def terminate_employee(
     *,
     employee: Employee,
@@ -431,6 +443,7 @@ def terminate_employee(
     )
 
 
+@requires_company_module("people", argument="employee")
 def retire_employee(
     *,
     employee: Employee,
@@ -450,6 +463,7 @@ def retire_employee(
     )
 
 
+@requires_company_module("people", argument="employee")
 def mark_employee_absconded(
     *,
     employee: Employee,
@@ -474,6 +488,7 @@ def mark_employee_absconded(
 # --------------------------------------------------------------------------
 
 
+@requires_company_module("people", argument="employee")
 def link_employee_user(*, employee: Employee, user: User) -> Employee:
     if not user.is_active:
         raise InactiveRelatedRecordError("Cannot link an inactive user account.")
@@ -489,6 +504,7 @@ def link_employee_user(*, employee: Employee, user: User) -> Employee:
     return employee
 
 
+@requires_company_module("people", argument="employee")
 def unlink_employee_user(*, employee: Employee) -> Employee:
     with transaction.atomic():
         employee.user = None
@@ -501,6 +517,7 @@ def unlink_employee_user(*, employee: Employee) -> Employee:
 # --------------------------------------------------------------------------
 
 
+@requires_company_module("people", argument="employee")
 def add_employee_address(
     *,
     employee: Employee,
@@ -533,6 +550,7 @@ def add_employee_address(
     return address
 
 
+@requires_company_module("people", argument="address")
 def update_employee_address(*, address: EmployeeAddress, **fields: Any) -> EmployeeAddress:
     with transaction.atomic():
         if fields.get("is_primary") is True:
@@ -545,10 +563,12 @@ def update_employee_address(*, address: EmployeeAddress, **fields: Any) -> Emplo
     return address
 
 
+@requires_company_module("people", argument="address")
 def set_primary_employee_address(*, address: EmployeeAddress) -> EmployeeAddress:
     return update_employee_address(address=address, is_primary=True)
 
 
+@requires_company_module("people", argument="address")
 def remove_employee_address(*, address: EmployeeAddress) -> None:
     address.delete()
 
@@ -558,6 +578,7 @@ def remove_employee_address(*, address: EmployeeAddress) -> None:
 # --------------------------------------------------------------------------
 
 
+@requires_company_module("people", argument="employee")
 def add_emergency_contact(
     *,
     employee: Employee,
@@ -586,6 +607,7 @@ def add_emergency_contact(
     return contact
 
 
+@requires_company_module("people", argument="contact")
 def update_emergency_contact(*, contact: EmergencyContact, **fields: Any) -> EmergencyContact:
     with transaction.atomic():
         if fields.get("is_primary") is True:
@@ -597,9 +619,11 @@ def update_emergency_contact(*, contact: EmergencyContact, **fields: Any) -> Eme
     return contact
 
 
+@requires_company_module("people", argument="contact")
 def set_primary_emergency_contact(*, contact: EmergencyContact) -> EmergencyContact:
     return update_emergency_contact(contact=contact, is_primary=True)
 
 
+@requires_company_module("people", argument="contact")
 def remove_emergency_contact(*, contact: EmergencyContact) -> None:
     contact.delete()

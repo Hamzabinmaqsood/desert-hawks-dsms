@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from dsms.deployment.models import DutyAssignment, EmployeeScheduleBlock
 from dsms.notifications.services import publish_notification_event
+from dsms.subscriptions.enforcement import requires_company_module
 from dsms.training.models import TrainingEnrollment
 
 from .models import (
@@ -139,6 +140,7 @@ def get_leave_balance(*, employee, leave_type, as_of_datetime=None):
 
 
 @transaction.atomic
+@requires_company_module("leave", argument="employee")
 def create_leave_request(
     *, actor, employee, leave_type, starts_at, ends_at, reason, emergency_request=False
 ):
@@ -183,6 +185,7 @@ def create_leave_request(
 
 
 @transaction.atomic
+@requires_company_module("leave", argument="request")
 def submit_leave_request(*, request, actor):
     item = LeaveRequest.objects.select_for_update().get(pk=request.pk)
     if item.status != "DRAFT" or item.employee.user_id != actor.id:
@@ -222,6 +225,7 @@ def submit_leave_request(*, request, actor):
 
 
 @transaction.atomic
+@requires_company_module("leave", argument="request")
 def finalize_leave_approval(*, request, actor, approval_step=None, comments=""):
     item = (
         LeaveRequest.objects.select_for_update()
@@ -299,6 +303,7 @@ def finalize_leave_approval(*, request, actor, approval_step=None, comments=""):
 
 
 @transaction.atomic
+@requires_company_module("leave", argument="request")
 def approve_leave_cancellation(*, request, actor):
     item = LeaveRequest.objects.select_for_update().get(pk=request.pk)
     if item.status not in {"APPROVED", "CANCEL_REQUESTED"}:
@@ -418,6 +423,7 @@ def detect_leave_roster_conflicts(*, leave_request):
 
 
 @transaction.atomic
+@requires_company_module("leave", argument="conflict")
 def create_replacement_request_from_leave(*, conflict, actor):
     from dsms.deployment.models import RosterAvailabilityConflict
     from dsms.deployment.services import create_replacement_request

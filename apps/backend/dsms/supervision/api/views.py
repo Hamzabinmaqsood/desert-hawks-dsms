@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 
 from dsms.identity import access
 from dsms.identity.permissions import HasRBACPermission, RequiresPermission
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin, entitled_company_ids
 
 from .. import models, services
 from ..exceptions import SupervisionPermissionError, SupervisionValidationError
@@ -31,12 +32,15 @@ def _service_call(function, **kwargs):
 
 
 class NoDeleteViewSet(
+    TenantModuleViewMixin,
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
+    required_module_ids = ("security_supervision",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
 
@@ -71,6 +75,7 @@ class NoDeleteViewSet(
         return {"company": company, "branch": branch}
 
     def perform_create(self, serializer: serializers.BaseSerializer) -> None:
+        self.require_modules_for(self._scope(serializer.validated_data).get("company"))
         if not access.has_permission(
             user=self.request.user,
             permission=self._permission("add"),
@@ -90,8 +95,13 @@ class NoDeleteViewSet(
 
 
 class ReadOnlyWorkflowViewSet(
-    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
 ):
+    required_module_ids = ("security_supervision",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "head", "options"]
 
@@ -113,6 +123,13 @@ def basic(model):
     class ViewSet(NoDeleteViewSet):
         queryset = model.objects.all()
         serializer_class = SERIALIZERS[model.__name__]
+
+    ViewSet.module_allow_global_rows = model is models.InspectionTemplate
+    ViewSet.module_company_lookup = {
+        models.InspectionResponse: "inspection__company_id",
+        models.SiteObservation: "site_visit__company_id",
+        models.SiteVisitClientFeedback: "site_visit__company_id",
+    }.get(model, "company_id")
 
     return ViewSet
 
@@ -278,8 +295,13 @@ class CorrectiveActionViewSet(NoDeleteViewSet):
 
 
 class GuardObservationViewSet(
-    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
 ):
+    required_module_ids = ("security_supervision",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     custom_action_permissions = {
         "list": "supervision.view_guard_observation",
@@ -296,7 +318,14 @@ class GuardObservationViewSet(
         ).order_by("id")
 
 
-class EvidenceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class EvidenceViewSet(
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    required_module_ids = ("security_supervision",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     custom_action_permissions = {
         "list": "supervision.view_sensitive_field_evidence",
@@ -318,25 +347,45 @@ class EvidenceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets
         ).order_by("id")
 
 
-def _supervision_summary(*, user, permission, exceptions_only=False):
+def _supervision_summary(*, request, permission, exceptions_only=False):
+    user = request.user
+    company_ids = entitled_company_ids(
+        request,
+        None
+        if user.is_superuser
+        else access.get_accessible_company_ids(user, permission=permission),
+        ("security_supervision",),
+    )
     today = timezone.localdate()
     plans = scoped_queryset(
-        models.SupervisorVisitPlan.objects.filter(planned_date=today),
+        models.SupervisorVisitPlan.objects.filter(planned_date=today, company_id__in=company_ids),
         user=user,
         permission=permission,
     )
-    visits = scoped_queryset(models.SiteVisit.objects.all(), user=user, permission=permission)
+    visits = scoped_queryset(
+        models.SiteVisit.objects.filter(company_id__in=company_ids),
+        user=user,
+        permission=permission,
+    )
     inspections = scoped_queryset(
-        models.SiteInspection.objects.all(), user=user, permission=permission
+        models.SiteInspection.objects.filter(company_id__in=company_ids),
+        user=user,
+        permission=permission,
     )
     findings = scoped_queryset(
-        models.InspectionFinding.objects.all(), user=user, permission=permission
+        models.InspectionFinding.objects.filter(company_id__in=company_ids),
+        user=user,
+        permission=permission,
     )
     actions = scoped_queryset(
-        models.CorrectiveAction.objects.all(), user=user, permission=permission
+        models.CorrectiveAction.objects.filter(company_id__in=company_ids),
+        user=user,
+        permission=permission,
     ).exclude(status__in=["VERIFIED", "CLOSED", "CANCELLED"])
     observations = scoped_queryset(
-        models.GuardObservation.objects.all(), user=user, permission=permission
+        models.GuardObservation.objects.filter(company_id__in=company_ids),
+        user=user,
+        permission=permission,
     )
     if exceptions_only:
         return {
@@ -369,7 +418,8 @@ def _supervision_summary(*, user, permission, exceptions_only=False):
     }
 
 
-class SupervisionSummaryView(APIView):
+class SupervisionSummaryView(TenantModuleViewMixin, APIView):
+    required_module_ids = ("security_supervision",)
     permission_classes = [IsAuthenticated, RequiresPermission]
     required_permission = "supervision.view_supervision_dashboard"
     exceptions_only = False
@@ -378,7 +428,7 @@ class SupervisionSummaryView(APIView):
     def get(self, request):
         return Response(
             _supervision_summary(
-                user=request.user,
+                request=request,
                 permission=self.required_permission,
                 exceptions_only=self.exceptions_only,
             )

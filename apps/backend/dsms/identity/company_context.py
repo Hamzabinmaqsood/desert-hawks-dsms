@@ -13,6 +13,7 @@ from django.db.models import QuerySet
 from django.http import Http404
 
 from dsms.organization.models import Company
+from dsms.subscriptions.enforcement import resolve_company_modules
 
 from . import access
 from .enums import AccessScopeType
@@ -125,9 +126,16 @@ def build_company_context(request: Any) -> dict[str, Any]:
     selected_company = get_selected_company(request)
     if selected_company is None and len(companies) == 1:
         selected_company = select_company(request, companies[0].id)
+    entitlement = (
+        resolve_company_modules(selected_company, request=request)
+        if selected_company is not None
+        else None
+    )
     return {
         "user": request.user,
         "companies": companies,
         "selected_company": selected_company,
         "selection_required": bool(companies) and selected_company is None,
+        "effective_modules": list(entitlement.module_ids) if entitlement else [],
+        "entitlement_revision": entitlement.entitlement_revision if entitlement else 0,
     }

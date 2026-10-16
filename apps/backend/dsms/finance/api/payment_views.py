@@ -3,7 +3,7 @@ from typing import Any, cast
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -13,6 +13,8 @@ from rest_framework.response import Response
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.organization.models import Company
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
+from dsms.subscriptions.enforcement import company_ids_with_module
 from dsms.workforce.models import Employee
 
 from ..payment_models import (
@@ -34,6 +36,7 @@ from ..payment_services import (
     record_manual_payment_success,
     release_payment_batch,
     request_payment_destination_change,
+    require_payment_origin,
     retry_failed_payment,
     submit_payment_batch,
     verify_payment_destination_change,
@@ -68,7 +71,9 @@ def _call(function: Any, **kwargs: Any) -> Any:
         ) from exc
 
 
-class PaymentScopedViewSet(viewsets.GenericViewSet[Any]):
+class PaymentScopedViewSet(TenantModuleViewMixin, viewsets.GenericViewSet[Any]):
+    required_module_ids = ("finance_core",)
+    module_company_lookup = "company_id"
     permission_classes = [FinancePermission]
 
     def company_ids(self) -> set[Any]:
@@ -85,8 +90,17 @@ class PaymentScopedViewSet(viewsets.GenericViewSet[Any]):
         ):
             raise PermissionDenied("Company-scoped payment permission required.")
 
+    def get_object(self) -> Any:
+        item = super().get_object()
+        require_payment_origin(item)
+        return item
 
-class PaymentProviderViewSet(viewsets.ModelViewSet[PaymentProviderConfiguration]):
+
+class PaymentProviderViewSet(
+    TenantModuleViewMixin, viewsets.ModelViewSet[PaymentProviderConfiguration]
+):
+    required_module_ids = ("finance_core",)
+    module_company_lookup = "company_id"
     permission_classes = [FinancePermission]
     permission_code = "finance.manage_payment_providers"
     serializer_class = PaymentProviderSerializer
@@ -118,8 +132,18 @@ class PaymentBeneficiaryViewSet(PaymentScopedViewSet):
     }
 
     def get_queryset(self) -> Any:
-        return tenant_consistent_payment_beneficiaries(
+        queryset = tenant_consistent_payment_beneficiaries(
             PaymentBeneficiaryProfile.objects.filter(company_id__in=self.company_ids())
+        )
+        return queryset.filter(
+            Q(
+                employee__isnull=False,
+                company_id__in=company_ids_with_module("payroll"),
+            )
+            | Q(
+                vendor__isnull=False,
+                company_id__in=company_ids_with_module("procurement_payables"),
+            )
         )
 
     def list(self, request: Request) -> Response:
@@ -173,9 +197,16 @@ class PaymentBatchViewSet(PaymentScopedViewSet):
     }
 
     def get_queryset(self) -> Any:
-        return tenant_consistent_payment_batches(
+        queryset = tenant_consistent_payment_batches(
             PaymentBatch.objects.filter(company_id__in=self.company_ids())
-        ).prefetch_related(
+        ).filter(
+            Q(batch_type="PAYROLL", company_id__in=company_ids_with_module("payroll"))
+            | Q(
+                batch_type="VENDOR",
+                company_id__in=company_ids_with_module("procurement_payables"),
+            )
+        )
+        return queryset.prefetch_related(
             Prefetch("instructions", queryset=tenant_consistent_payment_instructions())
         )
 
@@ -227,6 +258,7 @@ class PaymentBatchViewSet(PaymentScopedViewSet):
 
 
 class PaymentInstructionViewSet(PaymentScopedViewSet):
+    module_company_lookup = "batch__company_id"
     serializer_class = PaymentInstructionSerializer
     permission_code = "finance.view_paymentinstruction"
     action_permissions = {
@@ -236,8 +268,15 @@ class PaymentInstructionViewSet(PaymentScopedViewSet):
     }
 
     def get_queryset(self) -> Any:
-        return tenant_consistent_payment_instructions(
+        queryset = tenant_consistent_payment_instructions(
             PaymentInstruction.objects.filter(batch__company_id__in=self.company_ids())
+        )
+        return queryset.filter(
+            Q(payslip__isnull=False, batch__company_id__in=company_ids_with_module("payroll"))
+            | Q(
+                payment_voucher__isnull=False,
+                batch__company_id__in=company_ids_with_module("procurement_payables"),
+            )
         )
 
     def list(self, request: Request) -> Response:

@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
+from dsms.subscriptions.enforcement import require_company_module
 
 from . import domain_services
 from .crypto import encrypt_payment_destination
@@ -40,6 +41,34 @@ from .services import (
     post_journal,
     submit_journal,
 )
+
+
+def payment_origin_module(value: Any) -> str:
+    """Map a payment resource to its authoritative originating product module."""
+
+    if isinstance(value, PaymentInstruction):
+        if value.payslip_id:
+            return "payroll"
+        if value.payment_voucher_id:
+            return "procurement_payables"
+        value = value.batch
+    if isinstance(value, PaymentBeneficiaryProfile):
+        if value.employee_id:
+            return "payroll"
+        if value.vendor_id:
+            return "procurement_payables"
+    if isinstance(value, PaymentBatch):
+        return "payroll" if value.batch_type == "PAYROLL" else "procurement_payables"
+    return "finance_core"
+
+
+def require_payment_origin(value: Any) -> None:
+    company = getattr(value, "company", None)
+    if company is None and isinstance(value, PaymentInstruction):
+        company = value.batch.company
+    if company is None:
+        raise RuntimeError("Cannot derive Company for payment entitlement enforcement")
+    require_company_module(company, payment_origin_module(value))
 
 
 def _audit(action: str, actor: Any, obj: Any, summary: str) -> None:
@@ -145,6 +174,7 @@ def request_payment_destination_change(
     vendor: Any = None,
     currency: str | None = None,
 ) -> PaymentBeneficiaryProfile:
+    require_company_module(company, "payroll" if employee is not None else "procurement_payables")
     raw = destination.strip()
     if len(raw) < 4 or (employee is None) == (vendor is None):
         raise ValidationError("A valid destination and exactly one beneficiary are required.")
@@ -171,6 +201,7 @@ def request_payment_destination_change(
 def verify_payment_destination_change(
     *, profile: PaymentBeneficiaryProfile, actor: Any
 ) -> PaymentBeneficiaryProfile:
+    require_payment_origin(profile)
     item = PaymentBeneficiaryProfile.objects.select_for_update(of=("self",)).get(pk=profile.pk)
     if item.status != BeneficiaryStatus.REQUESTED:
         raise ValidationError("Only requested destinations can be verified.")
@@ -184,6 +215,7 @@ def verify_payment_destination_change(
 def approve_payment_destination_change(
     *, profile: PaymentBeneficiaryProfile, actor: Any
 ) -> PaymentBeneficiaryProfile:
+    require_payment_origin(profile)
     item = PaymentBeneficiaryProfile.objects.select_for_update(of=("self",)).get(pk=profile.pk)
     if (
         item.status != BeneficiaryStatus.UNDER_VERIFICATION
@@ -202,6 +234,7 @@ def approve_payment_destination_change(
 def activate_payment_destination(
     *, profile: PaymentBeneficiaryProfile, actor: Any
 ) -> PaymentBeneficiaryProfile:
+    require_payment_origin(profile)
     item = PaymentBeneficiaryProfile.objects.select_for_update(of=("self",)).get(pk=profile.pk)
     if item.status != BeneficiaryStatus.APPROVED or item.approved_by_id == actor.id:
         raise ValidationError("An independently approved destination is required for activation.")
@@ -233,6 +266,7 @@ def activate_payment_destination(
 def create_payroll_disbursement_batch(
     *, payroll_run: PayrollRun, provider: PaymentProviderConfiguration, actor: Any
 ) -> PaymentBatch:
+    require_company_module(payroll_run.company, "payroll")
     run = PayrollRun.objects.select_for_update(of=("self",)).get(pk=payroll_run.pk)
     if run.status not in {WorkflowStatus.APPROVED, WorkflowStatus.POSTED}:
         raise ValidationError("Payroll run must be approved or posted.")
@@ -286,6 +320,7 @@ def create_vendor_payment_batch(
     if not vouchers:
         raise ValidationError("At least one approved payment voucher is required.")
     company = vouchers[0].company
+    require_company_module(company, "procurement_payables")
     if provider.company_id != company.id or not provider.is_active:
         raise ValidationError("An active provider from the voucher company is required.")
     batch = PaymentBatch.objects.create(
@@ -338,6 +373,7 @@ def create_vendor_payment_batch(
 
 @transaction.atomic
 def submit_payment_batch(*, batch: PaymentBatch, actor: Any) -> PaymentBatch:
+    require_payment_origin(batch)
     item = PaymentBatch.objects.select_for_update(of=("self",)).get(pk=batch.pk)
     if item.status != PaymentBatchStatus.DRAFT:
         raise ValidationError("Only draft payment batches can be submitted.")
@@ -348,6 +384,7 @@ def submit_payment_batch(*, batch: PaymentBatch, actor: Any) -> PaymentBatch:
 
 @transaction.atomic
 def approve_payment_batch(*, batch: PaymentBatch, actor: Any) -> PaymentBatch:
+    require_payment_origin(batch)
     item = PaymentBatch.objects.select_for_update(of=("self",)).get(pk=batch.pk)
     if item.status != PaymentBatchStatus.PENDING_APPROVAL or item.prepared_by_id == actor.id:
         raise ValidationError("Independent approval is required.")
@@ -363,6 +400,7 @@ def approve_payment_batch(*, batch: PaymentBatch, actor: Any) -> PaymentBatch:
 
 @transaction.atomic
 def release_payment_batch(*, batch: PaymentBatch, actor: Any) -> PaymentBatch:
+    require_payment_origin(batch)
     item = PaymentBatch.objects.select_for_update(of=("self",)).get(pk=batch.pk)
     if item.status != PaymentBatchStatus.APPROVED or item.approved_by_id == actor.id:
         raise ValidationError("Independent release of an approved batch is required.")
@@ -387,6 +425,7 @@ def _queue_batch(batch_id: Any) -> None:
 def process_payment_instruction(
     *, instruction: PaymentInstruction, adapter: PaymentProviderAdapter | None = None
 ) -> PaymentInstruction:
+    require_payment_origin(instruction)
     item = (
         PaymentInstruction.objects.select_for_update(of=("self",))
         .select_related("batch__provider")
@@ -482,6 +521,7 @@ def _refresh_batch(batch_id: Any) -> None:
 
 @transaction.atomic
 def retry_failed_payment(*, instruction: PaymentInstruction, actor: Any) -> PaymentInstruction:
+    require_payment_origin(instruction)
     item = PaymentInstruction.objects.select_for_update(of=("self",)).get(pk=instruction.pk)
     if item.status != PaymentInstructionStatus.FAILED or item.failure_code != "TEMPORARY_FAILURE":
         raise ValidationError("Only known temporary failures may be retried.")
@@ -495,6 +535,7 @@ def retry_failed_payment(*, instruction: PaymentInstruction, actor: Any) -> Paym
 def query_payment_instruction_status(
     *, instruction: PaymentInstruction, adapter: PaymentProviderAdapter | None = None
 ) -> PaymentInstruction:
+    require_payment_origin(instruction)
     item = (
         PaymentInstruction.objects.select_for_update(of=("self",))
         .select_related("batch__provider")
@@ -552,6 +593,7 @@ def query_payment_instruction_status(
 def record_manual_payment_success(
     *, instruction: PaymentInstruction, actor: Any, evidence_reference: str
 ) -> PaymentInstruction:
+    require_payment_origin(instruction)
     item = (
         PaymentInstruction.objects.select_for_update(of=("self",))
         .select_related("batch")
@@ -588,6 +630,7 @@ def record_manual_payment_success(
 def reconcile_settlement(
     *, settlement: PaymentProviderSettlement, actor: Any
 ) -> PaymentProviderSettlement:
+    require_company_module(settlement.company, "finance_core")
     item = PaymentProviderSettlement.objects.select_for_update(of=("self",)).get(pk=settlement.pk)
     item.status = SettlementStatus.PROCESSING
     exceptions = 0
@@ -638,6 +681,7 @@ def reconcile_settlement(
 
 
 def vendor_statement(*, vendor: Any) -> list[dict[str, Any]]:
+    require_company_module(vendor.company, "procurement_payables")
     bills = vendor.bills.order_by("bill_date", "id")
     return [
         {

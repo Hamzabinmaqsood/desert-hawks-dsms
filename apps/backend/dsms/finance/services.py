@@ -15,6 +15,7 @@ from dsms.organization.business_defaults import (
     validate_document_prefix,
 )
 from dsms.organization.models import Branch, Company, Department
+from dsms.subscriptions.enforcement import requires_company_module
 
 from .enums import FinanceEventType, JournalStatus, PeriodStatus
 from .exceptions import (
@@ -56,6 +57,7 @@ def _save(instance: models.Model) -> None:
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="company")
 def create_account(
     *,
     company: Company,
@@ -84,6 +86,7 @@ def create_account(
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="account")
 def update_account(*, account: Account, **fields: Any) -> Account:
     if account.journal_lines.filter(journal_entry__status=JournalStatus.POSTED).exists():
         protected = {"company", "code", "account_type", "parent", "allow_posting"}
@@ -96,6 +99,7 @@ def update_account(*, account: Account, **fields: Any) -> Account:
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="company")
 def create_fiscal_year(
     *, company: Company, name: str, start_date: date, end_date: date
 ) -> FiscalYear:
@@ -111,6 +115,7 @@ def create_fiscal_year(
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="fiscal_year")
 def create_accounting_period(
     *, fiscal_year: FiscalYear, name: str, start_date: date, end_date: date
 ) -> AccountingPeriod:
@@ -134,6 +139,7 @@ def create_accounting_period(
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="company")
 def create_cost_center(
     *,
     company: Company,
@@ -218,6 +224,7 @@ def _validate_period(
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="company")
 def create_journal(
     *,
     company: Company,
@@ -279,6 +286,7 @@ def validate_balanced(journal: JournalEntry) -> None:
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="journal")
 def submit_journal(*, journal: JournalEntry, actor: User) -> JournalEntry:
     journal = JournalEntry.objects.select_for_update().get(pk=journal.pk)
     if journal.status != JournalStatus.DRAFT:
@@ -295,6 +303,7 @@ def submit_journal(*, journal: JournalEntry, actor: User) -> JournalEntry:
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="journal")
 def approve_journal(*, journal: JournalEntry, actor: User) -> JournalEntry:
     journal = JournalEntry.objects.select_for_update().get(pk=journal.pk)
     if journal.status != JournalStatus.SUBMITTED:
@@ -313,6 +322,7 @@ def approve_journal(*, journal: JournalEntry, actor: User) -> JournalEntry:
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="journal")
 def reject_journal(*, journal: JournalEntry, actor: User, reason: str) -> JournalEntry:
     journal = JournalEntry.objects.select_for_update().get(pk=journal.pk)
     if journal.status != JournalStatus.SUBMITTED or not reason.strip():
@@ -330,6 +340,7 @@ def reject_journal(*, journal: JournalEntry, actor: User, reason: str) -> Journa
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="journal")
 def post_journal(
     *, journal: JournalEntry, actor: User, allow_soft_closed: bool = False
 ) -> JournalEntry:
@@ -369,6 +380,7 @@ def post_journal(
 
 
 @transaction.atomic
+@requires_company_module("finance_core", argument="journal")
 def reverse_journal(
     *, journal: JournalEntry, actor: User, reversal_date: date, reason: str
 ) -> JournalEntry:
@@ -448,6 +460,7 @@ def _change_period(
         return locked
 
 
+@requires_company_module("finance_core", argument="period")
 def soft_close_accounting_period(*, period: AccountingPeriod, actor: User) -> AccountingPeriod:
     return _change_period(
         period=period,
@@ -457,6 +470,7 @@ def soft_close_accounting_period(*, period: AccountingPeriod, actor: User) -> Ac
     )
 
 
+@requires_company_module("finance_core", argument="period")
 def close_accounting_period(*, period: AccountingPeriod, actor: User) -> AccountingPeriod:
     if period.journal_entries.filter(
         status__in=[JournalStatus.SUBMITTED, JournalStatus.APPROVED]
@@ -472,6 +486,7 @@ def close_accounting_period(*, period: AccountingPeriod, actor: User) -> Account
     )
 
 
+@requires_company_module("finance_core", argument="period")
 def reopen_accounting_period(
     *, period: AccountingPeriod, actor: User, reason: str
 ) -> AccountingPeriod:

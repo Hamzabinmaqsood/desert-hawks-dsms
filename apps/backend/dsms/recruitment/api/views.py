@@ -15,6 +15,11 @@ from rest_framework.response import Response
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission
+from dsms.subscriptions.api.enforcement import (
+    TenantModuleViewMixin,
+    entitled_company_ids,
+    module_api_surface,
+)
 
 from .. import models, selectors, services
 from . import security, serializers
@@ -33,12 +38,15 @@ CREATE_ACTOR_FIELDS = {
 
 
 class NoDeleteViewSet(
+    TenantModuleViewMixin,
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
+    required_module_ids = ("recruitment",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
     model: type[Any]
@@ -59,6 +67,7 @@ class NoDeleteViewSet(
         )
 
     def _guard_write(self, candidate):
+        self.require_modules_for(candidate)
         user = self.request.user
         company = security.company_for(candidate)
         if company is None:
@@ -234,6 +243,7 @@ OnboardingTemplateViewSet = basic_viewset(
 )
 
 
+@module_api_surface("recruitment")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -242,6 +252,7 @@ def dashboard_summary(request):
     return Response(selectors.recruitment_summary(company_ids=company_ids))
 
 
+@module_api_surface("recruitment")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -249,6 +260,7 @@ def dashboard_funnel(request):
     return Response(list(selectors.recruitment_funnel(company_ids=_dashboard_company_ids(request))))
 
 
+@module_api_surface("recruitment")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -260,15 +272,16 @@ def _dashboard_company_ids(request):
     user: User = request.user
     if user.is_superuser:
         requested = request.query_params.get("company")
-        return [requested] if requested else None
+        requested_ids = [requested] if requested else None
+        return entitled_company_ids(request, requested_ids, ("recruitment",))
     if "recruitment.view_candidateapplication" not in access.get_effective_permissions(user):
         raise PermissionDenied("You do not have permission to view recruitment data.")
-    ids = access.get_fully_accessible_company_ids(
+    accessible_ids = access.get_fully_accessible_company_ids(
         user, permission="recruitment.view_candidateapplication"
     )
     requested = request.query_params.get("company")
     if requested:
-        if str(requested) not in {str(value) for value in ids}:
+        if str(requested) not in {str(value) for value in accessible_ids}:
             raise Http404
         return [requested]
-    return list(ids)
+    return entitled_company_ids(request, list(accessible_ids), ("recruitment",))

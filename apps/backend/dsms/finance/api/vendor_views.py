@@ -9,6 +9,7 @@ from rest_framework.serializers import BaseSerializer
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 
 from ..enums import AccountType
 from ..models import Account
@@ -37,7 +38,9 @@ class VendorReferencePermission(BasePermission):
         )
 
 
-class VendorViewSet(viewsets.ModelViewSet[Vendor]):
+class VendorViewSet(TenantModuleViewMixin, viewsets.ModelViewSet[Vendor]):
+    required_module_ids = ("procurement_payables",)
+    module_company_lookup = "company_id"
     serializer_class = VendorSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
@@ -73,7 +76,9 @@ class VendorViewSet(viewsets.ModelViewSet[Vendor]):
         vendor_serializer.save()
 
 
-class VendorPayableAccountViewSet(viewsets.ReadOnlyModelViewSet[Account]):
+class VendorPayableAccountViewSet(TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[Account]):
+    required_module_ids = ("procurement_payables",)
+    module_company_lookup = "company_id"
     serializer_class = VendorPayableAccountSerializer
     permission_classes = [permissions.IsAuthenticated, VendorReferencePermission]
     pagination_class = None

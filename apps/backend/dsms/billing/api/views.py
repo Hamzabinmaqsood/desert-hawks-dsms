@@ -22,6 +22,7 @@ from dsms.identity import access
 from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission, RequiresPermission
 from dsms.organization.business_defaults import company_local_date
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 
 from ..models import (
     BillingRule,
@@ -126,7 +127,9 @@ def _field_errors(exc: DjangoValidationError) -> serializers.ValidationError:
     )
 
 
-class NoDeleteViewSet(viewsets.ModelViewSet[Any]):
+class NoDeleteViewSet(TenantModuleViewMixin, viewsets.ModelViewSet[Any]):
+    required_module_ids = ("billing_receivables",)
+    module_company_lookup = "company_id"
     http_method_names = ["get", "post", "put", "patch", "head", "options"]
     company_lookup = "company_id"
 
@@ -156,6 +159,7 @@ class NoDeleteViewSet(viewsets.ModelViewSet[Any]):
             for field in model._meta.fields:
                 if field.name not in serializer.validated_data and field.name != "id":
                     setattr(candidate, field.name, getattr(serializer.instance, field.name))
+        self.require_modules_for(candidate)
         company_id = security.company_id_for(candidate)
         if company_id is None:
             if not actor.is_superuser:
@@ -202,6 +206,7 @@ class BillingRuleViewSet(NoDeleteViewSet):
     serializer_class = BillingRuleSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
     company_lookup = "billing_schedule__company_id"
+    module_company_lookup = "billing_schedule__company_id"
 
 
 class TaxCodeViewSet(NoDeleteViewSet):
@@ -215,7 +220,9 @@ class TaxCodeViewSet(NoDeleteViewSet):
         parameters=[OpenApiParameter("line_id", OpenApiTypes.UUID, OpenApiParameter.PATH)]
     )
 )
-class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
+class InvoiceViewSet(TenantModuleViewMixin, viewsets.ModelViewSet[ClientInvoice]):
+    required_module_ids = ("billing_receivables",)
+    module_company_lookup = "company_id"
     serializer_class = InvoiceReadSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
@@ -369,7 +376,11 @@ class InvoiceViewSet(viewsets.ModelViewSet[ClientInvoice]):
         )
 
 
-class InvoiceRevenueAccountViewSet(mixins.ListModelMixin, viewsets.GenericViewSet[Account]):
+class InvoiceRevenueAccountViewSet(
+    TenantModuleViewMixin, mixins.ListModelMixin, viewsets.GenericViewSet[Account]
+):
+    required_module_ids = ("billing_receivables",)
+    module_company_lookup = "company_id"
     """Read-only, Invoice-scoped revenue-account selection for line entry.
 
     Deliberately does not reuse `finance.AccountViewSet`, which gates even
@@ -396,7 +407,11 @@ class InvoiceRevenueAccountViewSet(mixins.ListModelMixin, viewsets.GenericViewSe
         ).order_by("company_id", "code")
 
 
-class ReceiptBankAccountViewSet(mixins.ListModelMixin, viewsets.GenericViewSet[BankAccount]):
+class ReceiptBankAccountViewSet(
+    TenantModuleViewMixin, mixins.ListModelMixin, viewsets.GenericViewSet[BankAccount]
+):
+    required_module_ids = ("billing_receivables",)
+    module_company_lookup = "company_id"
     """Minimal receiving-account selector for Receipt authors and confirmers."""
 
     serializer_class = ReceiptBankAccountSerializer
@@ -413,7 +428,13 @@ class ReceiptBankAccountViewSet(mixins.ListModelMixin, viewsets.GenericViewSet[B
         )
 
 
-class ReceiptClientViewSet(mixins.ListModelMixin, viewsets.GenericViewSet[ClientBillingProfile]):
+class ReceiptClientViewSet(
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet[ClientBillingProfile],
+):
+    required_module_ids = ("billing_receivables",)
+    module_company_lookup = "company_id"
     """Minimal client/currency projection for Receipt authors."""
 
     serializer_class = ReceiptClientSerializer
@@ -571,7 +592,8 @@ class BillingDashboardSerializer(serializers.Serializer[Any]):
     """Schema marker for aggregate dashboard dictionaries."""
 
 
-class DashboardViewSet(viewsets.ViewSet):
+class DashboardViewSet(TenantModuleViewMixin, viewsets.ViewSet):
+    required_module_ids = ("billing_receivables",)
     serializer_class = BillingDashboardSerializer
     permission_classes = [permissions.IsAuthenticated, RequiresPermission]
     required_permission = "billing.view_clientinvoice"
@@ -583,6 +605,7 @@ class DashboardViewSet(viewsets.ViewSet):
         from dsms.organization.models import Company
 
         company = get_object_or_404(Company, pk=company_id)
+        self.require_modules_for(company)
         if not access.has_permission(
             user=cast(User, request.user), permission=self.required_permission, company=company
         ):
@@ -594,6 +617,7 @@ class DashboardViewSet(viewsets.ViewSet):
         from dsms.contracts.models import Client
 
         client = get_object_or_404(Client, pk=request.query_params.get("client"))
+        self.require_modules_for(client)
         if not access.has_permission(
             user=cast(User, request.user),
             permission=self.required_permission,
@@ -603,7 +627,9 @@ class DashboardViewSet(viewsets.ViewSet):
         return response.Response(get_client_account_balance(client))
 
 
-class CreditNoteViewSet(viewsets.ReadOnlyModelViewSet[ClientCreditNote]):
+class CreditNoteViewSet(TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[ClientCreditNote]):
+    required_module_ids = ("billing_receivables",)
+    module_company_lookup = "company_id"
     queryset = ClientCreditNote.objects.select_related("company", "client", "invoice")
     serializer_class = CreditNoteSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
@@ -640,7 +666,9 @@ class CreditNoteViewSet(viewsets.ReadOnlyModelViewSet[ClientCreditNote]):
         )
 
 
-class DebitNoteViewSet(viewsets.ReadOnlyModelViewSet[ClientDebitNote]):
+class DebitNoteViewSet(TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[ClientDebitNote]):
+    required_module_ids = ("billing_receivables",)
+    module_company_lookup = "company_id"
     queryset = ClientDebitNote.objects.select_related("company", "client", "invoice")
     serializer_class = DebitNoteSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]

@@ -12,6 +12,11 @@ from rest_framework.response import Response
 
 from dsms.identity import access
 from dsms.identity.permissions import HasRBACPermission
+from dsms.subscriptions.api.enforcement import (
+    TenantModuleViewMixin,
+    entitled_company_ids,
+    module_api_surface,
+)
 
 from .. import models, services
 from ..exceptions import AttendancePermissionError, AttendanceValidationError
@@ -34,12 +39,15 @@ def _service_call(function, **kwargs):
 
 
 class NoDeleteViewSet(
+    TenantModuleViewMixin,
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
+    required_module_ids = ("attendance",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
 
@@ -70,6 +78,7 @@ class NoDeleteViewSet(
         }
 
     def perform_create(self, serializer: serializers.BaseSerializer) -> None:
+        self.require_modules_for(self._scope(serializer.validated_data).get("company"))
         if not access.has_permission(
             user=self.request.user,
             permission=self._permission("add"),
@@ -95,8 +104,13 @@ class NoDeleteViewSet(
 
 
 class ReadOnlyEvidenceViewSet(
-    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
 ):
+    required_module_ids = ("attendance",)
+    module_company_lookup = "attendance_record__company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "head", "options"]
 
@@ -133,8 +147,10 @@ class QRStationViewSet(NoDeleteViewSet):
 
 
 class AttendanceRecordViewSet(
-    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+    TenantModuleViewMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
 ):
+    required_module_ids = ("attendance",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     custom_action_permissions = {
         "check_in": "attendance.perform_own_checkin",
@@ -314,6 +330,7 @@ class ExceptionViewSet(ReadOnlyEvidenceViewSet):
 
 
 class EventViewSet(ReadOnlyEvidenceViewSet):
+    module_company_lookup = "attendance_record__company_id"
     queryset = models.AttendanceEvent.objects.select_related(
         "attendance_record", "subject_employee", "actor_user"
     )
@@ -321,6 +338,7 @@ class EventViewSet(ReadOnlyEvidenceViewSet):
 
 
 class VerificationViewSet(ReadOnlyEvidenceViewSet):
+    module_company_lookup = "attendance_event__attendance_record__company_id"
     queryset = models.AttendanceVerification.objects.select_related(
         "attendance_event", "qr_station", "verified_by"
     )
@@ -328,10 +346,12 @@ class VerificationViewSet(ReadOnlyEvidenceViewSet):
 
 
 class ChangeEventViewSet(ReadOnlyEvidenceViewSet):
+    module_company_lookup = "attendance_record__company_id"
     queryset = models.AttendanceChangeEvent.objects.all()
     serializer_class = SERIALIZERS["AttendanceChangeEvent"]
 
 
+@module_api_surface("attendance")
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -342,8 +362,14 @@ def dashboard_summary(request):
     permission = "attendance.view_attendancerecord"
     if permission not in access.get_effective_permissions(request.user):
         raise PermissionDenied("Attendance dashboard permission is required.")
+    company_ids = entitled_company_ids(
+        request,
+        access.get_accessible_company_ids(request.user, permission=permission),
+        ("attendance",),
+    )
     records = consistent_queryset(models.AttendanceRecord.objects.all()).filter(
         scheduled_start_at__date=today,
+        company_id__in=company_ids,
         branch_id__in=access.get_accessible_branch_ids(request.user, permission=permission),
     )
     return Response(

@@ -18,6 +18,7 @@ from dsms.attendance.tenant_queries import consistent_attendance_records
 from dsms.deployment.tenant_queries import consistent_employees
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.subscriptions.enforcement import requires_company_module
 from dsms.workforce.models import Employee
 
 from .exceptions import PatrolPermissionError, PatrolValidationError
@@ -89,6 +90,7 @@ def _distance(
 
 
 @transaction.atomic
+@requires_company_module("security_patrol", argument="checkpoint")
 def rotate_checkpoint_qr(*, checkpoint: PatrolCheckpoint, actor: User, expires_at=None):
     checkpoint = (
         consistent_checkpoints(
@@ -183,6 +185,7 @@ def evaluate_patrol_eligibility(
 
 
 @transaction.atomic
+@requires_company_module("security_patrol", argument="patrol_task")
 def assign_employee_to_patrol(*, patrol_task: PatrolTask, employee: Employee, actor: User):
     task = (
         consistent_tasks(
@@ -217,6 +220,7 @@ def assign_employee_to_patrol(*, patrol_task: PatrolTask, employee: Employee, ac
 
 
 @transaction.atomic
+@requires_company_module("security_patrol", argument="patrol_task")
 def start_patrol(
     *,
     actor: User,
@@ -305,6 +309,7 @@ def start_patrol(
 
 
 @transaction.atomic
+@requires_company_module("security_patrol", argument="patrol_run")
 def verify_patrol_checkpoint(
     *,
     actor: User,
@@ -482,6 +487,7 @@ def _recalculate(run: PatrolRun) -> None:
 
 
 @transaction.atomic
+@requires_company_module("security_patrol", argument="patrol_run")
 def complete_patrol(
     *, actor: User, patrol_run: PatrolRun, event_time=None, gps=None, client_event_id=None
 ):
@@ -548,13 +554,23 @@ def complete_patrol(
 
 
 def mark_missed_patrols(*, at=None):
+    from dsms.subscriptions.enforcement import company_ids_with_module
+
     now = at or timezone.now()
     tasks = consistent_tasks(
-        PatrolTask.objects.filter(status__in=["SCHEDULED", "READY"], scheduled_end_at__lt=now)
+        PatrolTask.objects.filter(
+            company_id__in=company_ids_with_module("security_patrol"),
+            status__in=["SCHEDULED", "READY"],
+            scheduled_end_at__lt=now,
+        )
     )
     count = tasks.update(status="MISSED")
     for task in consistent_tasks(
-        PatrolTask.objects.filter(status="MISSED", scheduled_end_at__lt=now)
+        PatrolTask.objects.filter(
+            company_id__in=company_ids_with_module("security_patrol"),
+            status="MISSED",
+            scheduled_end_at__lt=now,
+        )
     ):
         PatrolException.objects.get_or_create(
             patrol_task=task,

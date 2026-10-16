@@ -102,7 +102,7 @@ def snapshot(**overrides: Any) -> AnalyticsSnapshot:
 def test_registry_allowlist_and_metric_dimension_guards() -> None:
     registry = MetricProviderRegistry()
     provider = FixedProvider()
-    registry.register("  TEST.Provider ", provider)
+    registry.register("  TEST.Provider ", provider, source_module_id="analytics")
     assert registry.get("test.provider") is provider
     with pytest.raises(LookupError, match="not allowlisted"):
         registry.get("unknown")
@@ -218,6 +218,10 @@ def test_snapshot_calculation_stores_typed_explainable_values(
     monkeypatch.setattr(
         "dsms.analytics.services.registry.get",
         lambda code: FixedProvider(cast(Decimal | int | str | None, value)),
+    )
+    monkeypatch.setattr(
+        "dsms.analytics.services.registry.source_module_id",
+        lambda code: "analytics",
     )
     actor = UserFactory.create()
 

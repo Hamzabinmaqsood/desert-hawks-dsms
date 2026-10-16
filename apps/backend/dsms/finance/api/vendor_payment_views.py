@@ -9,6 +9,7 @@ from rest_framework.permissions import BasePermission
 
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 
 from .. import domain_services
 from ..enums import AccountType, PaymentStatus, WorkflowStatus
@@ -67,7 +68,9 @@ class VendorPaymentPermission(BasePermission):
         return code in access.get_effective_permissions(user)
 
 
-class VendorPaymentViewSet(viewsets.ModelViewSet[PaymentVoucher]):
+class VendorPaymentViewSet(TenantModuleViewMixin, viewsets.ModelViewSet[PaymentVoucher]):
+    required_module_ids = ("procurement_payables",)
+    module_company_lookup = "company_id"
     permission_classes = [permissions.IsAuthenticated, VendorPaymentPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
     filterset_fields = ["status", "payment_status", "vendor_bill"]
@@ -235,7 +238,9 @@ def _reference_company_ids(user: User) -> set[Any]:
     return ids
 
 
-class PayableVendorBillViewSet(viewsets.ReadOnlyModelViewSet[VendorBill]):
+class PayableVendorBillViewSet(TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[VendorBill]):
+    required_module_ids = ("procurement_payables",)
+    module_company_lookup = "company_id"
     serializer_class = PayableVendorBillSerializer
     permission_classes = [permissions.IsAuthenticated, PaymentReferencePermission]
     pagination_class = None
@@ -253,7 +258,9 @@ class PayableVendorBillViewSet(viewsets.ReadOnlyModelViewSet[VendorBill]):
         )
 
 
-class PaymentAccountViewSet(viewsets.ReadOnlyModelViewSet[Account]):
+class PaymentAccountViewSet(TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[Account]):
+    required_module_ids = ("procurement_payables",)
+    module_company_lookup = "company_id"
     serializer_class = PaymentAccountSerializer
     permission_classes = [permissions.IsAuthenticated, PaymentReferencePermission]
     pagination_class = None

@@ -5,6 +5,8 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
+from dsms.subscriptions.enforcement import company_ids_with_module
+
 from .operations_models import CompanyExpense, RecurringExpenseTemplate
 
 # Import payment tasks so the single Finance Celery module discovers them.
@@ -24,6 +26,7 @@ def generate_recurring_expense_drafts() -> int:
         templates = (
             RecurringExpenseTemplate.objects.select_for_update(of=("self",))
             .filter(
+                company_id__in=company_ids_with_module("finance_core"),
                 is_active=True,
                 next_due_date__lte=today,
                 created_by__isnull=False,

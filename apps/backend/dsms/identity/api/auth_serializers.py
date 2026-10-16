@@ -172,6 +172,15 @@ class CompanyContextResponseSerializer(serializers.Serializer[Any]):
     companies = CompanyContextCompanySerializer(many=True, read_only=True)
     selected_company = SelectedCompanyContextSerializer(read_only=True, allow_null=True)
     selection_required = serializers.BooleanField(read_only=True)
+    effective_modules = serializers.ListField(
+        child=serializers.CharField(),
+        read_only=True,
+        help_text="Stable product-module IDs enabled for the selected Company.",
+    )
+    entitlement_revision = serializers.IntegerField(
+        read_only=True,
+        help_text="Selected Company entitlement cache discriminator; legacy mode uses 0.",
+    )
 
 
 class SelectCompanySerializer(serializers.Serializer[Any]):

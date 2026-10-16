@@ -18,6 +18,7 @@ from dsms.audit.services import record_audit_event
 from dsms.deployment.tenant_queries import consistent_employees
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 from dsms.workforce.models import Employee
 
 from .. import selectors, services
@@ -51,12 +52,16 @@ def call_service(function: Any, **kwargs: Any) -> Any:
 
 
 class DocumentTypeViewSet(
+    TenantModuleViewMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet[Any],
 ):
+    required_module_ids = ("people",)
+    module_company_lookup = "company_id"
+    module_allow_global_rows = True
     http_method_names = ["get", "post", "patch", "head", "options"]
     permission_classes = [HasDocumentPermission]
     required_permission = "documents.manage_document_types"
@@ -71,6 +76,8 @@ class DocumentTypeViewSet(
         )
 
     def _require_target_scope(self, request: Request, company: Any) -> None:
+        if company is not None:
+            self.require_modules_for(company)
         user = cast(User, request.user)
         if company is None:
             if not user.is_superuser:
@@ -154,12 +161,15 @@ class DocumentTypeViewSet(
     partial_update=extend_schema(tags=["Employee Documents"]),
 )
 class EmployeeDocumentViewSet(
+    TenantModuleViewMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet[Any],
 ):
+    required_module_ids = ("people",)
+    module_company_lookup = "employee__company_id"
     http_method_names = ["get", "post", "patch", "head", "options"]
     permission_classes = [HasDocumentPermission]
     filterset_class = EmployeeDocumentFilter
@@ -212,6 +222,7 @@ class EmployeeDocumentViewSet(
     def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        self.require_modules_for(serializer.validated_data.get("employee"))
         employee = serializer.validated_data["employee"]
         self._require_scope(request, employee, "documents.add_employeedocument")
         item = call_service(
@@ -375,7 +386,9 @@ class EmployeeDocumentViewSet(
         )
 
 
-class EmployeeDocumentsView(APIView):
+class EmployeeDocumentsView(TenantModuleViewMixin, APIView):
+    required_module_ids = ("people",)
+    module_company_lookup = "employee__company_id"
     permission_classes = [HasDocumentPermission]
     required_permission = "documents.view_employeedocument"
 

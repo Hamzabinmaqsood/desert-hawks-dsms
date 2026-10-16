@@ -18,6 +18,7 @@ from dsms.attendance.tenant_queries import (
 from dsms.contracts.models import SecurityPost, SecuritySite
 from dsms.deployment.models import DutyAssignment
 from dsms.identity.models import User
+from dsms.subscriptions.enforcement import requires_company_module
 from dsms.workforce.models import Employee
 
 from .exceptions import SupervisionPermissionError, SupervisionValidationError
@@ -90,6 +91,7 @@ def _distance(site, latitude: Decimal, longitude: Decimal) -> Decimal | None:
 
 
 @transaction.atomic
+@requires_company_module("security_supervision", argument="site")
 def start_site_visit(
     *,
     actor: User,
@@ -166,6 +168,7 @@ def start_site_visit(
 
 
 @transaction.atomic
+@requires_company_module("security_supervision", argument="visit")
 def end_site_visit(
     *, visit: SiteVisit, actor: User, summary: str = "", gps: dict | None = None
 ) -> SiteVisit:
@@ -196,6 +199,7 @@ def end_site_visit(
 
 
 @transaction.atomic
+@requires_company_module("security_supervision", argument="inspection")
 def submit_inspection(*, inspection: SiteInspection) -> SiteInspection:
     inspection = consistent_inspections(
         SiteInspection.objects.select_for_update(of=("self",)).prefetch_related(
@@ -251,6 +255,7 @@ def submit_inspection(*, inspection: SiteInspection) -> SiteInspection:
 
 
 @transaction.atomic
+@requires_company_module("security_supervision", argument="site_visit")
 def verify_guard_during_visit(
     *,
     site_visit: SiteVisit,
@@ -341,6 +346,7 @@ def mark_missed_visits(*, at: datetime | None = None) -> int:
 
 
 @transaction.atomic
+@requires_company_module("security_supervision", argument="action")
 def transition_corrective_action(
     *, action: CorrectiveAction, actor: User, target: str, notes: str = ""
 ) -> CorrectiveAction:
@@ -370,6 +376,7 @@ def transition_corrective_action(
     return action
 
 
+@requires_company_module("security_supervision", argument="supervisor")
 def generate_supervisor_visit_plan(
     *, supervisor: Employee, date_from: date, date_to: date, created_by: User | None = None
 ):

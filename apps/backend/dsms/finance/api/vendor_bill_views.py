@@ -13,6 +13,7 @@ from rest_framework.permissions import BasePermission
 
 from dsms.identity import access
 from dsms.identity.models import User
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 
 from .. import domain_services
 from ..enums import ApprovalDocumentType, WorkflowStatus
@@ -85,7 +86,9 @@ class VendorBillPermission(BasePermission):
         return code in access.get_effective_permissions(user)
 
 
-class VendorBillViewSet(viewsets.ModelViewSet[VendorBill]):
+class VendorBillViewSet(TenantModuleViewMixin, viewsets.ModelViewSet[VendorBill]):
+    required_module_ids = ("procurement_payables",)
+    module_company_lookup = "company_id"
     permission_classes = [permissions.IsAuthenticated, VendorBillPermission]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
     filterset_fields = ["status", "vendor"]
@@ -343,7 +346,11 @@ class VendorBillReferencePermission(BasePermission):
         )
 
 
-class VendorBillExpenseAccountViewSet(viewsets.ReadOnlyModelViewSet[Account]):
+class VendorBillExpenseAccountViewSet(
+    TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[Account]
+):
+    required_module_ids = ("procurement_payables",)
+    module_company_lookup = "company_id"
     serializer_class = VendorBillExpenseAccountSerializer
     permission_classes = [permissions.IsAuthenticated, VendorBillReferencePermission]
     pagination_class = None

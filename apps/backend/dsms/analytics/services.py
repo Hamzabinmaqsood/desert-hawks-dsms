@@ -9,10 +9,15 @@ from django.utils import timezone
 from dsms.audit.models import AuditCategory, AuditSeverity
 from dsms.audit.services import record_audit_event
 from dsms.finance.services import next_document_number
+from dsms.subscriptions.enforcement import (
+    company_has_module,
+    require_company_module,
+    requires_company_module,
+)
 
 from .enums import ExecutiveHealthStatus, MetricDirection, SnapshotStatus
 from .models import AnalyticsSnapshot, AnalyticsSnapshotValue, ManagementKPI, ManagementReport
-from .providers import AnalyticsMetricResult, registry
+from .providers import AnalyticsMetricResult, _missing, registry
 
 
 def calculate_metric(
@@ -20,6 +25,16 @@ def calculate_metric(
 ) -> AnalyticsMetricResult:
     if not metric_definition.is_active:
         raise ValidationError("Inactive analytics metrics cannot be calculated.")
+    company = dimensions.get("company")
+    if company is not None:
+        require_company_module(company, "analytics")
+        source_module_id = registry.source_module_id(metric_definition.provider_code)
+        if not company_has_module(company, source_module_id):
+            return _missing(
+                period_start,
+                period_end,
+                f"Source module {source_module_id} is not enabled.",
+            )
     supported = {
         "company": metric_definition.supports_company,
         "region": metric_definition.supports_region,
@@ -82,6 +97,7 @@ def compare_metric_periods(
 
 
 @transaction.atomic
+@requires_company_module("analytics", argument="snapshot")
 def calculate_snapshot(
     *, snapshot: AnalyticsSnapshot, metric_definitions: Any, actor: Any
 ) -> AnalyticsSnapshot:
@@ -126,6 +142,7 @@ def calculate_snapshot(
 
 
 @transaction.atomic
+@requires_company_module("analytics", argument="snapshot")
 def publish_snapshot(*, snapshot: AnalyticsSnapshot, actor: Any) -> AnalyticsSnapshot:
     locked = AnalyticsSnapshot.objects.select_for_update().get(pk=snapshot.pk)
     if locked.status != SnapshotStatus.VALIDATED:
@@ -148,6 +165,7 @@ def publish_snapshot(*, snapshot: AnalyticsSnapshot, actor: Any) -> AnalyticsSna
 
 
 @transaction.atomic
+@requires_company_module("analytics", argument="snapshot")
 def validate_snapshot(*, snapshot: AnalyticsSnapshot, actor: Any) -> AnalyticsSnapshot:
     locked = (
         AnalyticsSnapshot.objects.select_for_update().prefetch_related("values").get(pk=snapshot.pk)
@@ -183,6 +201,7 @@ def validate_snapshot(*, snapshot: AnalyticsSnapshot, actor: Any) -> AnalyticsSn
 
 
 @transaction.atomic
+@requires_company_module("analytics", argument="snapshot")
 def return_snapshot_for_recalculation(
     *, snapshot: AnalyticsSnapshot, actor: Any, reason: str
 ) -> AnalyticsSnapshot:
@@ -200,6 +219,7 @@ def return_snapshot_for_recalculation(
 
 
 @transaction.atomic
+@requires_company_module("analytics", argument="original")
 def create_snapshot_revision(
     *, original: AnalyticsSnapshot, generated_by: Any
 ) -> AnalyticsSnapshot:
@@ -228,6 +248,7 @@ def create_snapshot_revision(
 
 
 @transaction.atomic
+@requires_company_module("analytics", argument="company")
 def create_management_report(
     *, company: Any, snapshot: AnalyticsSnapshot, report_type: str, title: str, actor: Any
 ) -> ManagementReport:

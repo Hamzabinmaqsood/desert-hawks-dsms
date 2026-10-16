@@ -18,6 +18,7 @@ from dsms.contracts.selectors import get_active_staffing_requirements
 from dsms.documents.enums import DocumentStatus
 from dsms.identity.models import User
 from dsms.leave.services import evaluate_employee_availability
+from dsms.subscriptions.enforcement import requires_company_module
 from dsms.training.enums import ReadinessStatus
 from dsms.training.services import evaluate_employee_readiness
 from dsms.workforce.enums import EmploymentStatus
@@ -272,6 +273,7 @@ def evaluate_deployment_eligibility(
 
 
 @transaction.atomic
+@requires_company_module("workforce_scheduling", argument="roster_period")
 def generate_roster_demand(
     *, roster_period: RosterPeriod, actor: User | None = None
 ) -> dict[str, int]:
@@ -340,6 +342,7 @@ def generate_roster_demand(
 
 
 @transaction.atomic
+@requires_company_module("workforce_scheduling", argument="duty_shift")
 def assign_employee_to_shift(
     *,
     duty_shift: DutyShift,
@@ -422,6 +425,7 @@ def _validate_roster_graph(roster: RosterPeriod) -> None:
 
 
 @transaction.atomic
+@requires_company_module("workforce_scheduling", argument="roster")
 def submit_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
     obj = consistent_rosters(RosterPeriod.objects.select_for_update(of=("self",))).get(pk=roster.pk)
     if obj.status not in {RosterStatus.DRAFT, RosterStatus.GENERATED}:
@@ -439,6 +443,7 @@ def submit_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
 
 
 @transaction.atomic
+@requires_company_module("workforce_scheduling", argument="roster")
 def approve_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
     obj = consistent_rosters(RosterPeriod.objects.select_for_update(of=("self",))).get(pk=roster.pk)
     if obj.status != RosterStatus.UNDER_REVIEW:
@@ -463,6 +468,7 @@ def approve_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
 
 
 @transaction.atomic
+@requires_company_module("workforce_scheduling", argument="roster")
 def publish_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
     obj = consistent_rosters(RosterPeriod.objects.select_for_update(of=("self",))).get(pk=roster.pk)
     if obj.status != RosterStatus.APPROVED:
@@ -489,6 +495,7 @@ def publish_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
 
 
 @transaction.atomic
+@requires_company_module("workforce_scheduling", argument="roster")
 def lock_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
     obj = consistent_rosters(RosterPeriod.objects.select_for_update(of=("self",))).get(pk=roster.pk)
     if obj.status != RosterStatus.PUBLISHED:
@@ -512,6 +519,7 @@ def lock_roster(*, roster: RosterPeriod, actor: User) -> RosterPeriod:
 
 
 @transaction.atomic
+@requires_company_module("workforce_scheduling", argument="original_assignment")
 def create_replacement_request(
     *,
     original_assignment: DutyAssignment,
@@ -542,6 +550,7 @@ def create_replacement_request(
 
 
 @transaction.atomic
+@requires_company_module("workforce_scheduling", argument="replacement_request")
 def assign_replacement(
     *, replacement_request: ReplacementRequest, employee: Employee, actor: User
 ) -> DutyAssignment:

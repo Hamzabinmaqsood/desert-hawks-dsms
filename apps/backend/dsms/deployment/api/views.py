@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from dsms.contracts.models import SecurityPost, SecuritySite
 from dsms.identity import access
 from dsms.identity.permissions import HasRBACPermission, RequiresPermission
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 from dsms.workforce.models import Employee
 
 from .. import models, services
@@ -37,12 +38,15 @@ def _service_call(function, **kwargs):
 
 
 class NoDeleteViewSet(
+    TenantModuleViewMixin,
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
+    required_module_ids = ("workforce_scheduling",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "patch", "head", "options"]
 
@@ -85,6 +89,7 @@ class NoDeleteViewSet(
         return {"company": company, "branch": branch}
 
     def perform_create(self, serializer: serializers.BaseSerializer) -> None:
+        self.require_modules_for(self._scope(serializer.validated_data).get("company"))
         if not access.has_permission(
             user=self.request.user,
             permission=self._permission("add"),
@@ -111,8 +116,13 @@ class NoDeleteViewSet(
 
 
 class ReadOnlyWorkflowViewSet(
-    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+    TenantModuleViewMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
 ):
+    required_module_ids = ("workforce_scheduling",)
+    module_company_lookup = "company_id"
     permission_classes = [IsAuthenticated, HasRBACPermission]
     http_method_names = ["get", "post", "head", "options"]
 
@@ -132,6 +142,11 @@ def basic(model):
     class ViewSet(NoDeleteViewSet):
         queryset = model.objects.all()
         serializer_class = SERIALIZERS[model.__name__]
+
+    if model is models.EmployeeDeployment:
+        ViewSet.required_module_ids = ("security_operations",)
+    if model is models.DeploymentPoolMembership:
+        ViewSet.module_company_lookup = "pool__company_id"
 
     return ViewSet
 
@@ -236,6 +251,7 @@ class DutyShiftViewSet(NoDeleteViewSet):
 
 
 class DutyAssignmentViewSet(ReadOnlyWorkflowViewSet):
+    module_company_lookup = "duty_shift__company_id"
     queryset = models.DutyAssignment.objects.select_related("employee", "duty_shift__roster_period")
     serializer_class = SERIALIZERS["DutyAssignment"]
     custom_action_permissions = {"request_replacement": "deployment.replace_employee"}
@@ -289,6 +305,7 @@ class ReplacementRequestViewSet(ReadOnlyWorkflowViewSet):
 
 
 class RosterChangeViewSet(ReadOnlyWorkflowViewSet):
+    module_company_lookup = "roster_period__company_id"
     queryset = models.RosterChangeEvent.objects.select_related(
         "roster_period", "duty_shift", "duty_assignment"
     )
@@ -302,7 +319,8 @@ class AvailabilityConflictViewSet(ReadOnlyWorkflowViewSet):
     serializer_class = SERIALIZERS["RosterAvailabilityConflict"]
 
 
-class DeploymentEligibilityView(APIView):
+class DeploymentEligibilityView(TenantModuleViewMixin, APIView):
+    required_module_ids = ("workforce_scheduling",)
     permission_classes = [IsAuthenticated, RequiresPermission]
     required_permission = "deployment.view_dutyshift"
 
@@ -343,7 +361,8 @@ class DeploymentEligibilityView(APIView):
         )
 
 
-class DeploymentDashboardView(APIView):
+class DeploymentDashboardView(TenantModuleViewMixin, APIView):
+    required_module_ids = ("workforce_scheduling",)
     permission_classes = [IsAuthenticated, RequiresPermission]
     required_permission = "deployment.view_dutyshift"
 

@@ -12,6 +12,7 @@ from dsms.identity import access
 from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission
 from dsms.organization.models import Company
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 
 from ..models import AnalyticsDataQualityIssue, AnalyticsMetricDefinition, DashboardDefinition
 from ..services import calculate_metric, evaluate_kpi_health
@@ -30,7 +31,11 @@ def _company_for(request: Any) -> Company:
     return Company.objects.get(pk=company_id, is_active=True)
 
 
-class MetricCatalogViewSet(viewsets.ReadOnlyModelViewSet[AnalyticsMetricDefinition]):
+class MetricCatalogViewSet(
+    TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[AnalyticsMetricDefinition]
+):
+    required_module_ids = ("analytics",)
+    module_company_lookup = ""
     queryset = AnalyticsMetricDefinition.objects.filter(is_active=True).order_by("category", "code")
     serializer_class = MetricDefinitionSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
@@ -70,7 +75,8 @@ class ExecutiveSummarySerializer(serializers.Serializer[Any]):
     """Schema marker for configured dashboard payloads with dynamic sections."""
 
 
-class ExecutiveViewSet(viewsets.ViewSet):
+class ExecutiveViewSet(TenantModuleViewMixin, viewsets.ViewSet):
+    required_module_ids = ("analytics",)
     serializer_class = ExecutiveSummarySerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -139,7 +145,11 @@ class ExecutiveViewSet(viewsets.ViewSet):
         return self._summary(request, "FINANCIAL_POSITION")
 
 
-class DataQualityViewSet(viewsets.ReadOnlyModelViewSet[AnalyticsDataQualityIssue]):
+class DataQualityViewSet(
+    TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[AnalyticsDataQualityIssue]
+):
+    required_module_ids = ("analytics",)
+    module_company_lookup = "company_id"
     serializer_class = DataQualityIssueSerializer
     permission_classes = [permissions.IsAuthenticated]
     filterset_fields = ["company", "status", "severity", "issue_code", "source_app"]

@@ -6,6 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from dsms.identity.models import User
+from dsms.subscriptions.enforcement import requires_company_module
 
 from .enums import ClientStatus, ContractStatus, PostStatus, SiteStatus, StaffingRequirementStatus
 from .exceptions import (
@@ -24,6 +25,7 @@ from .models import (
 )
 
 
+@requires_company_module("client_contracts", argument="client")
 def activate_client(*, client: Client) -> Client:
     if not client.company.is_active:
         raise ContractValidationError("An inactive Company cannot activate clients.")
@@ -33,6 +35,7 @@ def activate_client(*, client: Client) -> Client:
 
 
 @transaction.atomic
+@requires_company_module("client_contracts", argument="contract")
 def submit_contract_for_approval(*, contract: ServiceContract) -> ServiceContract:
     contract = ServiceContract.objects.select_for_update().get(pk=contract.pk)
     if contract.status != ContractStatus.DRAFT:
@@ -47,6 +50,7 @@ def submit_contract_for_approval(*, contract: ServiceContract) -> ServiceContrac
 
 
 @transaction.atomic
+@requires_company_module("client_contracts", argument="contract")
 def approve_contract(*, contract: ServiceContract, actor: User) -> ServiceContract:
     contract = ServiceContract.objects.select_for_update().get(pk=contract.pk)
     if contract.created_by_id == actor.id and not actor.is_superuser:
@@ -63,6 +67,7 @@ def approve_contract(*, contract: ServiceContract, actor: User) -> ServiceContra
 
 
 @transaction.atomic
+@requires_company_module("client_contracts", argument="contract")
 def activate_contract(*, contract: ServiceContract) -> ServiceContract:
     contract = (
         ServiceContract.objects.select_for_update()
@@ -85,6 +90,7 @@ def activate_contract(*, contract: ServiceContract) -> ServiceContract:
 
 
 @transaction.atomic
+@requires_company_module("security_operations", argument="site")
 def activate_security_site(*, site: SecuritySite) -> SecuritySite:
     site = SecuritySite.objects.select_for_update().select_related("contract").get(pk=site.pk)
     if site.contract.status != ContractStatus.ACTIVE:
@@ -95,6 +101,7 @@ def activate_security_site(*, site: SecuritySite) -> SecuritySite:
 
 
 @transaction.atomic
+@requires_company_module("security_operations", argument="post")
 def activate_security_post(*, post: SecurityPost) -> SecurityPost:
     post = SecurityPost.objects.select_for_update().select_related("site").get(pk=post.pk)
     if post.site.status != SiteStatus.ACTIVE:
@@ -105,6 +112,7 @@ def activate_security_post(*, post: SecurityPost) -> SecurityPost:
 
 
 @transaction.atomic
+@requires_company_module("security_operations", argument="requirement")
 def activate_staffing_requirement(*, requirement: StaffingRequirement) -> StaffingRequirement:
     requirement = (
         StaffingRequirement.objects.select_for_update()
@@ -125,6 +133,7 @@ def activate_staffing_requirement(*, requirement: StaffingRequirement) -> Staffi
 
 
 @transaction.atomic
+@requires_company_module("security_operations", argument="requirement")
 def supersede_staffing_requirement(
     *,
     requirement: StaffingRequirement,
@@ -183,6 +192,7 @@ def supersede_staffing_requirement(
 
 
 @transaction.atomic
+@requires_company_module("client_contracts", argument="contract")
 def create_contract_amendment(
     *,
     contract: ServiceContract,

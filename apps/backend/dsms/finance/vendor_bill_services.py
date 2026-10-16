@@ -4,6 +4,8 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 
+from dsms.subscriptions.enforcement import requires_company_module
+
 from .enums import AccountType, MatchType, WorkflowStatus
 from .models import Account
 from .procurement_models import (
@@ -104,6 +106,7 @@ def _draft_bill(bill: VendorBill) -> VendorBill:
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="bill")
 def update_vendor_bill_draft(*, bill: VendorBill, values: dict[str, Any]) -> VendorBill:
     locked = _draft_bill(bill)
     vendor = values.get("vendor", locked.vendor)
@@ -127,6 +130,7 @@ def update_vendor_bill_draft(*, bill: VendorBill, values: dict[str, Any]) -> Ven
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="bill")
 def add_vendor_bill_line(*, bill: VendorBill, values: dict[str, Any]) -> VendorBillLine:
     locked = _draft_bill(bill)
     validate_vendor_bill_line(
@@ -141,6 +145,7 @@ def add_vendor_bill_line(*, bill: VendorBill, values: dict[str, Any]) -> VendorB
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="bill")
 def update_vendor_bill_line(
     *, bill: VendorBill, line: VendorBillLine, values: dict[str, Any]
 ) -> VendorBillLine:
@@ -160,6 +165,7 @@ def update_vendor_bill_line(
 
 
 @transaction.atomic
+@requires_company_module("procurement_payables", argument="bill")
 def delete_vendor_bill_line(*, bill: VendorBill, line: VendorBillLine) -> VendorBill:
     locked = _draft_bill(bill)
     target = VendorBillLine.objects.select_for_update().get(pk=line.pk, vendor_bill=locked)

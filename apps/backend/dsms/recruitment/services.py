@@ -4,6 +4,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from dsms.identity.models import User
+from dsms.subscriptions.enforcement import requires_company_module
 from dsms.workforce.models import Employee
 from dsms.workforce.services import create_employee
 
@@ -31,6 +32,7 @@ from .models import (
 )
 
 
+@requires_company_module("recruitment", argument="application")
 def change_application_status(
     *, application: CandidateApplication, status: str, actor: User | None, reason: str = ""
 ) -> CandidateApplication:
@@ -51,6 +53,7 @@ def change_application_status(
 
 
 @transaction.atomic
+@requires_company_module("recruitment", argument="requisition")
 def submit_requisition(*, requisition: ManpowerRequisition, actor: User) -> ManpowerRequisition:
     requisition = ManpowerRequisition.objects.select_for_update().get(pk=requisition.pk)
     if requisition.status != RequisitionStatus.DRAFT:
@@ -61,6 +64,7 @@ def submit_requisition(*, requisition: ManpowerRequisition, actor: User) -> Manp
 
 
 @transaction.atomic
+@requires_company_module("recruitment", argument="requisition")
 def approve_requisition(
     *, requisition: ManpowerRequisition, actor: User, approved_headcount: int
 ) -> ManpowerRequisition:
@@ -82,6 +86,7 @@ def approve_requisition(
 
 
 @transaction.atomic
+@requires_company_module("recruitment", argument="vacancy")
 def open_vacancy(*, vacancy: Vacancy) -> Vacancy:
     vacancy = (
         Vacancy.objects.select_for_update()
@@ -99,6 +104,7 @@ def open_vacancy(*, vacancy: Vacancy) -> Vacancy:
 
 
 @transaction.atomic
+@requires_company_module("recruitment", argument="offer")
 def approve_offer(*, offer: EmploymentOffer, actor: User) -> EmploymentOffer:
     offer = EmploymentOffer.objects.select_for_update().get(pk=offer.pk)
     if offer.created_by_id == actor.id:
@@ -111,6 +117,7 @@ def approve_offer(*, offer: EmploymentOffer, actor: User) -> EmploymentOffer:
 
 
 @transaction.atomic
+@requires_company_module("recruitment", argument="offer")
 def accept_offer(*, offer: EmploymentOffer, actor: User | None = None) -> EmploymentOffer:
     offer = (
         EmploymentOffer.objects.select_for_update().select_related("application").get(pk=offer.pk)
@@ -128,6 +135,7 @@ def accept_offer(*, offer: EmploymentOffer, actor: User | None = None) -> Employ
 
 
 @transaction.atomic
+@requires_company_module("recruitment", argument="offer")
 def begin_onboarding(
     *,
     offer: EmploymentOffer,
@@ -172,6 +180,7 @@ def begin_onboarding(
 
 
 @transaction.atomic
+@requires_company_module("recruitment", argument="onboarding")
 def mark_ready_to_hire(*, onboarding: OnboardingCase, actor: User) -> OnboardingCase:
     onboarding = OnboardingCase.objects.select_for_update().get(pk=onboarding.pk)
     incomplete = (
@@ -187,6 +196,7 @@ def mark_ready_to_hire(*, onboarding: OnboardingCase, actor: User) -> Onboarding
 
 
 @transaction.atomic
+@requires_company_module("recruitment", argument="check")
 def verify_background_check(
     *, check: BackgroundCheck, actor: User, summary: str = ""
 ) -> BackgroundCheck:
@@ -204,6 +214,7 @@ def verify_background_check(
 
 
 @transaction.atomic
+@requires_company_module("recruitment", argument="onboarding")
 def hire_candidate(
     *, onboarding: OnboardingCase, actor: User, employee_number: str | None = None
 ) -> Employee:

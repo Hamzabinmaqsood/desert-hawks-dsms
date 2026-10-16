@@ -28,6 +28,7 @@ from rest_framework.response import Response
 
 from dsms.identity import access as identity_access
 from dsms.identity.models import User
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 from dsms.workforce import selectors, services
 from dsms.workforce.exceptions import WorkforceError, to_error_dict
 from dsms.workforce.models import EmergencyContact, Employee, EmployeeAddress
@@ -128,12 +129,15 @@ def _employee_schema() -> dict[str, Any]:
 
 @extend_schema_view(**_employee_schema())
 class EmployeeViewSet(
+    TenantModuleViewMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet[Any],
 ):
+    required_module_ids = ("people",)
+    module_company_lookup = "company_id"
     http_method_names = ["get", "post", "patch", "head", "options"]
     permission_classes = [HasScopedEmployeePermission]
     model = Employee
@@ -211,6 +215,7 @@ class EmployeeViewSet(
         }
 
     def _guard_create_scope(self, validated_data: dict[str, Any]) -> None:
+        self.require_modules_for(validated_data.get("company"))
         user = cast(User, self.request.user)
         if user.is_superuser:
             return

@@ -11,6 +11,7 @@ from django.db.models import Avg, Q, QuerySet
 from django.utils import timezone
 
 from dsms.identity.models import User
+from dsms.subscriptions.enforcement import requires_company_module
 from dsms.workforce.enums import EmploymentStatus
 from dsms.workforce.models import Employee
 
@@ -55,6 +56,7 @@ def _add_months(value: date, months: int | None) -> date | None:
 
 
 @transaction.atomic
+@requires_company_module("learning", argument="course")
 def create_course_version(
     *,
     course: TrainingCourse,
@@ -95,6 +97,7 @@ def create_course_version(
     )
 
 
+@requires_company_module("learning", argument="course")
 def activate_training_course(*, course: TrainingCourse) -> TrainingCourse:
     if not course.versions.filter(is_current=True).exists():
         raise TrainingValidationError("A current course version is required before activation.")
@@ -104,6 +107,7 @@ def activate_training_course(*, course: TrainingCourse) -> TrainingCourse:
 
 
 @transaction.atomic
+@requires_company_module("learning", argument="session")
 def schedule_training_session(*, session: TrainingSession) -> TrainingSession:
     session = (
         TrainingSession.objects.select_for_update()
@@ -128,6 +132,7 @@ def schedule_training_session(*, session: TrainingSession) -> TrainingSession:
 
 
 @transaction.atomic
+@requires_company_module("learning", argument="session")
 def enroll_employee(
     *, session: TrainingSession, employee: Employee, actor: User, allow_waitlist: bool = True
 ) -> TrainingEnrollment:
@@ -164,6 +169,7 @@ def enroll_employee(
 
 
 @transaction.atomic
+@requires_company_module("learning", argument="enrollment")
 def record_assessment_result(
     *,
     enrollment: TrainingEnrollment,
@@ -190,6 +196,7 @@ def record_assessment_result(
 
 
 @transaction.atomic
+@requires_company_module("learning", argument="enrollment")
 def finalize_training_result(*, enrollment: TrainingEnrollment, actor: User) -> TrainingCompletion:
     enrollment = (
         TrainingEnrollment.objects.select_for_update()

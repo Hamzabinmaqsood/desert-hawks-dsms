@@ -16,6 +16,7 @@ from dsms.finance.procurement_models import PurchaseReceiptLine
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
 
 from .. import selectors
 from ..models import (
@@ -55,7 +56,9 @@ from .serializers import (
 ModelT = TypeVar("ModelT", bound=django_models.Model)
 
 
-class NoDeleteModelViewSet(viewsets.ModelViewSet[ModelT]):
+class NoDeleteModelViewSet(TenantModuleViewMixin, viewsets.ModelViewSet[ModelT]):
+    required_module_ids = ("asset_management",)
+    module_company_lookup = "company_id"
     http_method_names = ["get", "post", "put", "patch", "head", "options"]
 
     def get_scope_permission(self) -> str:
@@ -83,6 +86,7 @@ class NoDeleteModelViewSet(viewsets.ModelViewSet[ModelT]):
         return {"company": validated_data.get("company", getattr(instance, "company", None))}
 
     def _guard_create_scope(self, validated_data: dict[str, Any]) -> None:
+        self.require_modules_for(validated_data.get("company"))
         user = cast(User, self.request.user)
         if not access.has_permission(
             user=user,
@@ -202,7 +206,9 @@ class AssetViewSet(NoDeleteModelViewSet[Asset]):
         return selectors.asset_scope_kwargs(instance)
 
 
-class StockAccountViewSet(viewsets.ReadOnlyModelViewSet[StockAccount]):
+class StockAccountViewSet(TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[StockAccount]):
+    required_module_ids = ("asset_management",)
+    module_company_lookup = "company_id"
     serializer_class = StockAccountSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
     custom_action_permissions = {"balance": "assets.view_stockaccount"}
@@ -295,7 +301,9 @@ class AssetIssueViewSet(NoDeleteModelViewSet[AssetIssue]):
         return self._workflow(issue_assets)
 
 
-class AssetMovementViewSet(viewsets.ReadOnlyModelViewSet[AssetMovement]):
+class AssetMovementViewSet(TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[AssetMovement]):
+    required_module_ids = ("asset_management",)
+    module_company_lookup = "stock_account__company_id"
     serializer_class = AssetMovementSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
     filterset_fields = ["asset", "movement_type"]
@@ -310,8 +318,10 @@ class AssetMovementViewSet(viewsets.ReadOnlyModelViewSet[AssetMovement]):
 
 
 class ProcurementRegistrationViewSet(
-    viewsets.ReadOnlyModelViewSet[ProcurementInventoryRegistration]
+    TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[ProcurementInventoryRegistration]
 ):
+    required_module_ids = ("asset_management",)
+    module_company_lookup = "handoff__company_id"
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ["get", "post", "head", "options"]
 
@@ -392,7 +402,11 @@ class ProcurementRegistrationViewSet(
         )
 
 
-class ProcurementReceiptLineViewSet(viewsets.GenericViewSet[PurchaseReceiptLine]):
+class ProcurementReceiptLineViewSet(
+    TenantModuleViewMixin, viewsets.GenericViewSet[PurchaseReceiptLine]
+):
+    required_module_ids = ("asset_management",)
+    module_company_lookup = "purchase_receipt__company_id"
     serializer_class: Any = ProcurementAvailabilitySerializer
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ["get", "head", "options"]

@@ -28,6 +28,8 @@ from dsms.contracts.api.security import consistent_queryset as consistent_contra
 from dsms.contracts.models import SecuritySite, ServiceContract
 from dsms.incidents.models import Incident
 from dsms.incidents.tenant_queries import consistent_incidents
+from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
+from dsms.subscriptions.enforcement import company_has_module, require_company_modules
 
 from .serializers import (
     ClientIncidentSerializer,
@@ -41,7 +43,8 @@ from .serializers import (
 )
 
 
-class MembershipsView(APIView):
+class MembershipsView(TenantModuleViewMixin, APIView):
+    required_module_ids = ("client_portal",)
     serializer_class = MembershipSerializer
     permission_classes = [IsAuthenticated]
 
@@ -53,6 +56,12 @@ class MembershipsView(APIView):
             .select_related("client", "role")
             .prefetch_related("role__permissions")
         )
+        allowed_ids = [
+            item.id
+            for item in items
+            if company_has_module(item.client.company, "client_portal", request=request)
+        ]
+        items = items.filter(id__in=allowed_ids)
         return Response(MembershipSerializer(items, many=True).data)
 
 
@@ -60,15 +69,22 @@ class PortalResponseSerializer(serializers.Serializer):
     """Schema marker for portal endpoints with resource-specific responses."""
 
 
-class PortalBase(APIView):
+class PortalBase(TenantModuleViewMixin, APIView):
+    required_module_ids = ("client_portal",)
     serializer_class = PortalResponseSerializer
     permission_classes = [IsAuthenticated]
     permission_codename = None
 
     def membership(self, request, client_uuid):
-        return resolve_membership(
+        membership = resolve_membership(
             user=request.user, client_id=client_uuid, permission=self.permission_codename
         )
+        require_company_modules(
+            membership.client.company,
+            self.required_module_ids,
+            request=request,
+        )
+        return membership
 
 
 class MeView(PortalBase):
@@ -77,6 +93,7 @@ class MeView(PortalBase):
 
 
 class SitesView(PortalBase):
+    required_module_ids = ("client_portal", "security_operations")
     permission_codename = "view_sites"
 
     def get(self, request, client_uuid):
@@ -99,6 +116,7 @@ class ContractsView(PortalBase):
 
 
 class IncidentsView(PortalBase):
+    required_module_ids = ("client_portal", "security_incidents")
     permission_codename = "view_incident_summary"
 
     def get(self, request, client_uuid):
@@ -170,6 +188,11 @@ class ServiceRequestsView(PortalBase):
         member = resolve_membership(
             user=request.user, client_id=client_uuid, permission="create_service_request"
         )
+        require_company_modules(
+            member.client.company,
+            self.required_module_ids,
+            request=request,
+        )
         serializer = ServiceRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -186,6 +209,7 @@ class ServiceRequestsView(PortalBase):
 
 
 class ClientInvoicesView(PortalBase):
+    required_module_ids = ("client_portal", "billing_receivables")
     permission_codename = "view_client_invoices"
 
     @extend_schema(operation_id="client_portal_invoice_list")
@@ -201,6 +225,7 @@ class ClientInvoicesView(PortalBase):
 
 
 class ClientInvoiceDetailView(PortalBase):
+    required_module_ids = ("client_portal", "billing_receivables")
     permission_codename = "view_client_invoices"
 
     @extend_schema(operation_id="client_portal_invoice_detail")
@@ -219,6 +244,7 @@ class ClientInvoiceDetailView(PortalBase):
 
 
 class ClientInvoiceDownloadView(PortalBase):
+    required_module_ids = ("client_portal", "billing_receivables")
     permission_codename = "download_client_invoice"
 
     def get(self, request, client_uuid, invoice_uuid):
@@ -256,6 +282,7 @@ class ClientInvoiceDownloadView(PortalBase):
 
 
 class ClientReceiptsView(PortalBase):
+    required_module_ids = ("client_portal", "billing_receivables")
     permission_codename = "view_client_receipts"
 
     def get(self, request, client_uuid):
@@ -267,6 +294,7 @@ class ClientReceiptsView(PortalBase):
 
 
 class ClientStatementView(PortalBase):
+    required_module_ids = ("client_portal", "billing_receivables")
     permission_codename = "view_client_statement"
 
     def get(self, request, client_uuid):
