@@ -65,6 +65,8 @@ const companyContext = {
   companies: [companyA],
   selected_company: companyA,
   selection_required: false,
+  effective_modules: ["billing_receivables"],
+  entitlement_revision: 3,
 };
 
 function json(body: unknown, status = 200) {
@@ -187,6 +189,8 @@ describe("authentication BFF routes", () => {
         if (url.endsWith("/auth/company-context/")) return json(companyContext);
         if (url.endsWith("/auth/me/permissions/"))
           return json({ permissions: ["billing.view_clientinvoice"] });
+        if (url.endsWith("/auth/me/platform-capabilities/"))
+          return json({ capabilities: [], can_access_platform_admin: false });
         return json(scopes);
       }),
     );
@@ -217,10 +221,12 @@ describe("authentication BFF routes", () => {
           return json({ access: "rotated-access", refresh: "rotated-refresh" });
         }
         identityCalls += 1;
-        if (identityCalls <= 3) return json({ detail: "expired" }, 401);
+        if (identityCalls <= 4) return json({ detail: "expired" }, 401);
         if (url.endsWith("/auth/company-context/")) return json(companyContext);
         if (url.endsWith("/auth/me/permissions/"))
           return json({ permissions: [] });
+        if (url.endsWith("/auth/me/platform-capabilities/"))
+          return json({ capabilities: [], can_access_platform_admin: false });
         return json(scopes);
       }),
     );
@@ -233,7 +239,7 @@ describe("authentication BFF routes", () => {
     );
     expect(response.status).toBe(200);
     expect(refreshCalls).toBe(1);
-    expect(identityCalls).toBe(6);
+    expect(identityCalls).toBe(8);
     expect(response.cookies.get(ACCESS_COOKIE)?.value).toBe("rotated-access");
     expect(response.cookies.get(REFRESH_COOKIE)?.value).toBe("rotated-refresh");
   });

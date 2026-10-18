@@ -522,6 +522,82 @@ def set_subscription_module_override(
 
 
 @transaction.atomic
+def replace_subscription_module_overrides(
+    *,
+    actor: User,
+    subscription: Subscription,
+    overrides: Mapping[str, str],
+    reason: str = "",
+) -> EffectiveModuleResult:
+    """Replace the complete override set as one audited, revisioned operation."""
+
+    _require(actor, MANAGE_COMMERCIAL_SUBSCRIPTIONS)
+    normalized_reason = _normalized_reason(reason)
+    proposed = _normalized_overrides(overrides)
+    policy = _locked_policy(subscription.company_id)
+    _require_subscription_policy(policy)
+    locked = Subscription.objects.select_for_update().get(pk=subscription.pk)
+    _require_initialized(locked)
+    snapshot, previous = _subscription_sets(locked)
+    effective = _effective_set(snapshot, proposed)
+    if previous == proposed:
+        return resolve_effective_modules(locked.company)
+
+    locked.module_overrides.all().delete()
+    SubscriptionModuleOverride.objects.bulk_create(
+        [
+            SubscriptionModuleOverride(
+                subscription=locked,
+                module_id=module_id,
+                state=proposed[module_id],
+            )
+            for module_id in TENANT_MODULE_REGISTRY.ordered_ids(proposed)
+        ]
+    )
+    locked.entitlement_revision += 1
+    locked.save(update_fields=["entitlement_revision", "updated_at"])
+
+    batch_id = uuid4()
+    changed_ids = TENANT_MODULE_REGISTRY.ordered_ids(set(previous) | set(proposed))
+    for module_id in changed_ids:
+        previous_state = previous.get(module_id)
+        resulting_state = proposed.get(module_id)
+        if previous_state == resulting_state:
+            continue
+        if resulting_state is None:
+            event_type = SubscriptionEntitlementEventType.OVERRIDE_CLEARED
+            event_result = "INHERITED"
+        elif resulting_state == ModuleOverrideState.ENABLED:
+            event_type = SubscriptionEntitlementEventType.OVERRIDE_ENABLED
+            event_result = resulting_state
+        else:
+            event_type = SubscriptionEntitlementEventType.OVERRIDE_DISABLED
+            event_result = resulting_state
+        _create_subscription_event(
+            subscription=locked,
+            event_type=event_type,
+            actor=actor,
+            revision=locked.entitlement_revision,
+            reason=normalized_reason,
+            batch_id=batch_id,
+            previous_state=previous_state or "INHERITED",
+            resulting_state=event_result,
+            module_id=module_id,
+        )
+
+    return EffectiveModuleResult(
+        company_id=locked.company_id,
+        policy_mode=CompanyModulePolicyMode.SUBSCRIPTION,
+        module_ids=effective,
+        entitlement_revision=locked.entitlement_revision,
+        subscription_id=locked.pk,
+        subscription_status=locked.status,
+        snapshot_plan_entitlement_revision=locked.snapshot_plan_entitlement_revision,
+        snapshot_initialized=True,
+    )
+
+
+@transaction.atomic
 def clear_subscription_module_override(
     *,
     actor: User,

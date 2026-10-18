@@ -19,19 +19,27 @@ from dsms.identity.platform_access import (
 )
 from dsms.organization.models import Company
 
-from .. import services
+from .. import entitlements, services
 from ..exceptions import (
     SubscriptionAuthorizationError,
     SubscriptionConflictError,
     SubscriptionValidationError,
 )
 from ..models import Plan, Subscription
+from ..modules import TENANT_MODULE_REGISTRY
 from .serializers import (
+    EntitlementActionSerializer,
+    ModuleCatalogSerializer,
     PlanCreateSerializer,
+    PlanEntitlementResponseSerializer,
+    PlanEntitlementUpdateSerializer,
     PlanSerializer,
     PlanUpdateSerializer,
+    SubscriptionActivationSerializer,
     SubscriptionCreateSerializer,
+    SubscriptionEntitlementResponseSerializer,
     SubscriptionEventSerializer,
+    SubscriptionOverrideBatchSerializer,
     SubscriptionSerializer,
     SubscriptionTransitionSerializer,
 )
@@ -58,6 +66,86 @@ def _service_error(exc: Exception) -> NoReturn:
     if isinstance(exc, SubscriptionValidationError):
         raise ValidationError(exc.errors) from exc
     raise exc
+
+
+def _module_catalog_data() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": module.module_id,
+            "display_name": module.display_name,
+            "classification": module.classification,
+            "hard_dependencies": list(module.hard_dependencies),
+            "legacy_default": module.legacy_default,
+        }
+        for module in TENANT_MODULE_REGISTRY
+    ]
+
+
+def _plan_entitlement_data(plan: Plan) -> dict[str, Any]:
+    module_ids = TENANT_MODULE_REGISTRY.ordered_ids(
+        plan.module_defaults.values_list("module_id", flat=True)
+    )
+    return {
+        "plan_id": plan.pk,
+        "plan_code": plan.code,
+        "plan_name": plan.name,
+        "entitlement_revision": plan.entitlement_revision,
+        "enabled_module_ids": list(module_ids),
+        "snapshot_notice": (
+            "Plan updated; existing subscriptions retain their current snapshot "
+            "until explicitly updated."
+        ),
+    }
+
+
+def _subscription_entitlement_data(subscription: Subscription) -> dict[str, Any]:
+    effective = entitlements.resolve_effective_modules(subscription.company)
+    plan_module_ids = TENANT_MODULE_REGISTRY.ordered_ids(
+        subscription.plan.module_defaults.values_list("module_id", flat=True)
+    )
+    snapshot_module_ids = TENANT_MODULE_REGISTRY.ordered_ids(
+        subscription.module_snapshot.values_list("module_id", flat=True)
+    )
+    override_states = dict(subscription.module_overrides.values_list("module_id", "state"))
+    return {
+        "subscription_id": subscription.pk,
+        "subscription_status": subscription.status,
+        "company": subscription.company,
+        "plan": subscription.plan,
+        "policy_mode": effective.policy_mode,
+        "plan_entitlement_revision": subscription.plan.entitlement_revision,
+        "snapshot_plan_entitlement_revision": subscription.snapshot_plan_entitlement_revision,
+        "entitlement_revision": effective.entitlement_revision,
+        "snapshot_initialized": subscription.snapshot_initialized_at is not None,
+        "plan_module_ids": list(plan_module_ids),
+        "snapshot_module_ids": list(snapshot_module_ids),
+        "overrides": [
+            {"module_id": module_id, "state": override_states[module_id]}
+            for module_id in TENANT_MODULE_REGISTRY.ordered_ids(override_states)
+        ],
+        "effective_module_ids": list(effective.module_ids),
+    }
+
+
+def _entitlement_subscription(subscription_id: Any) -> Subscription:
+    return get_object_or_404(
+        Subscription.objects.select_related("company", "plan").prefetch_related(
+            "plan__module_defaults", "module_snapshot", "module_overrides"
+        ),
+        pk=subscription_id,
+    )
+
+
+class ModuleCatalogView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Platform - Product Modules"],
+        responses=ModuleCatalogSerializer(many=True),
+    )
+    def get(self, request: Request) -> Response:
+        _require_platform_user(request, VIEW_PLAN_CATALOG)
+        return Response(ModuleCatalogSerializer(_module_catalog_data(), many=True).data)
 
 
 class PlanCollectionView(APIView):
@@ -112,6 +200,40 @@ class PlanDetailView(APIView):
         return Response(PlanSerializer(plan).data)
 
 
+class PlanEntitlementView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Platform - Product Modules"],
+        responses=PlanEntitlementResponseSerializer,
+    )
+    def get(self, request: Request, plan_id: Any) -> Response:
+        _require_platform_user(request, VIEW_PLAN_CATALOG)
+        plan = get_object_or_404(Plan.objects.prefetch_related("module_defaults"), pk=plan_id)
+        return Response(PlanEntitlementResponseSerializer(_plan_entitlement_data(plan)).data)
+
+    @extend_schema(
+        tags=["Platform - Product Modules"],
+        request=PlanEntitlementUpdateSerializer,
+        responses=PlanEntitlementResponseSerializer,
+    )
+    def put(self, request: Request, plan_id: Any) -> Response:
+        actor = _require_platform_user(request, MANAGE_PLAN_CATALOG)
+        serializer = PlanEntitlementUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            plan = entitlements.set_plan_module_defaults(
+                actor=actor,
+                plan=get_object_or_404(Plan, pk=plan_id),
+                module_ids=serializer.validated_data["enabled_module_ids"],
+                reason=serializer.validated_data["reason"],
+            )
+        except Exception as exc:
+            _service_error(exc)
+        plan = Plan.objects.prefetch_related("module_defaults").get(pk=plan.pk)
+        return Response(PlanEntitlementResponseSerializer(_plan_entitlement_data(plan)).data)
+
+
 class SubscriptionCollectionView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -162,6 +284,120 @@ class SubscriptionDetailView(APIView):
             pk=subscription_id,
         )
         return Response(SubscriptionSerializer(subscription).data)
+
+
+class SubscriptionEntitlementDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Platform - Product Modules"],
+        responses=SubscriptionEntitlementResponseSerializer,
+    )
+    def get(self, request: Request, subscription_id: Any) -> Response:
+        _require_platform_user(request, VIEW_COMMERCIAL_SUBSCRIPTIONS)
+        subscription = _entitlement_subscription(subscription_id)
+        return Response(
+            SubscriptionEntitlementResponseSerializer(
+                _subscription_entitlement_data(subscription)
+            ).data
+        )
+
+
+class SubscriptionOverrideView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Platform - Product Modules"],
+        request=SubscriptionOverrideBatchSerializer,
+        responses=SubscriptionEntitlementResponseSerializer,
+    )
+    def put(self, request: Request, subscription_id: Any) -> Response:
+        actor = _require_platform_user(request, MANAGE_COMMERCIAL_SUBSCRIPTIONS)
+        serializer = SubscriptionOverrideBatchSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = dict(serializer.validated_data)
+        overrides = data.pop("overrides")
+        data.pop("enabled_module_ids")
+        data.pop("disabled_module_ids")
+        try:
+            entitlements.replace_subscription_module_overrides(
+                actor=actor,
+                subscription=get_object_or_404(Subscription, pk=subscription_id),
+                overrides=overrides,
+                **data,
+            )
+        except Exception as exc:
+            _service_error(exc)
+        subscription = _entitlement_subscription(subscription_id)
+        return Response(
+            SubscriptionEntitlementResponseSerializer(
+                _subscription_entitlement_data(subscription)
+            ).data
+        )
+
+
+class SubscriptionApplyPlanRevisionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Platform - Product Modules"],
+        request=EntitlementActionSerializer,
+        responses=SubscriptionEntitlementResponseSerializer,
+    )
+    def post(self, request: Request, subscription_id: Any) -> Response:
+        actor = _require_platform_user(request, MANAGE_COMMERCIAL_SUBSCRIPTIONS)
+        serializer = EntitlementActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            entitlements.apply_plan_entitlement_revision(
+                actor=actor,
+                subscription=get_object_or_404(Subscription, pk=subscription_id),
+                **serializer.validated_data,
+            )
+        except Exception as exc:
+            _service_error(exc)
+        subscription = _entitlement_subscription(subscription_id)
+        return Response(
+            SubscriptionEntitlementResponseSerializer(
+                _subscription_entitlement_data(subscription)
+            ).data
+        )
+
+
+class SubscriptionActivateEntitlementsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Platform - Product Modules"],
+        request=SubscriptionActivationSerializer,
+        responses=SubscriptionEntitlementResponseSerializer,
+    )
+    def post(self, request: Request, subscription_id: Any) -> Response:
+        actor = _require_platform_user(request, MANAGE_COMMERCIAL_SUBSCRIPTIONS)
+        serializer = SubscriptionActivationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = dict(serializer.validated_data)
+        overrides = data.pop("overrides")
+        data.pop("enabled_module_ids")
+        data.pop("disabled_module_ids")
+        subscription = get_object_or_404(
+            Subscription.objects.select_related("company"), pk=subscription_id
+        )
+        try:
+            entitlements.convert_company_to_subscription_entitlements(
+                actor=actor,
+                company=subscription.company,
+                overrides=overrides,
+                **data,
+            )
+        except Exception as exc:
+            _service_error(exc)
+        subscription = _entitlement_subscription(subscription_id)
+        return Response(
+            SubscriptionEntitlementResponseSerializer(
+                _subscription_entitlement_data(subscription)
+            ).data
+        )
 
 
 class SubscriptionTransitionView(APIView):

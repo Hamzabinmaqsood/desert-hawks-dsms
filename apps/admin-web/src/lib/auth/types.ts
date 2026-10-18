@@ -1,3 +1,5 @@
+import type { ModuleId } from "@/lib/modules";
+
 export interface CurrentUser {
   id: string;
   email: string;
@@ -68,6 +70,8 @@ export interface CompanyContext {
   companies: SelectableCompany[];
   selected_company: SelectedCompany | null;
   selection_required: boolean;
+  effective_modules: ModuleId[];
+  entitlement_revision: number;
 }
 
 export interface CompanyContextBootstrap extends CompanyContext {
@@ -79,7 +83,13 @@ export interface SessionData {
   user: CurrentUser;
   permissions: string[];
   scopes: AccessScopes;
+  platform_capabilities: PlatformCapabilities;
   company_context: CompanyContext;
+}
+
+export interface PlatformCapabilities {
+  capabilities: string[];
+  can_access_platform_admin: boolean;
 }
 
 export interface UnauthenticatedSession {

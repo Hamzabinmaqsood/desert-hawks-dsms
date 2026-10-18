@@ -46,6 +46,8 @@ export async function PUT(request: NextRequest) {
           companies: result.data.companies,
           selected_company: result.data.selected_company,
           selection_required: result.data.selection_required,
+          effective_modules: result.data.effective_modules,
+          entitlement_revision: result.data.entitlement_revision,
         }
       : {
           message:

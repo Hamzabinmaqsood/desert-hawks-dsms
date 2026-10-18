@@ -43,7 +43,10 @@ const session: SessionData = {
     accessible_operational_zone_ids: [],
     assignments: [],
   },
+  platform_capabilities: { capabilities: [], can_access_platform_admin: false },
   company_context: {
+    effective_modules: ["billing_receivables"],
+    entitlement_revision: 0,
     companies: [
       {
         id: "c",

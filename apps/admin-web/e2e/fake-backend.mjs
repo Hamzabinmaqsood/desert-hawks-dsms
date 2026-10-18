@@ -29,6 +29,14 @@ const COMPANY_A = {
   display_name: "Desert Hawks Alpha",
   legal_name: "Desert Hawks Alpha Limited",
   is_active: true,
+  effective_modules: [
+    "people",
+    "client_contracts",
+    "finance_core",
+    "billing_receivables",
+    "procurement_payables",
+  ],
+  entitlement_revision: 4,
   branding: {
     display_name: "Alpha Shield",
     tagline: "Alpha operations",
@@ -52,6 +60,8 @@ const COMPANY_B = {
   display_name: "Desert Hawks Bravo",
   legal_name: "Desert Hawks Bravo Limited",
   is_active: true,
+  effective_modules: ["finance_core", "procurement_payables"],
+  entitlement_revision: 9,
   branding: {
     display_name: "Bravo Guard",
     tagline: "Bravo operations",
@@ -70,6 +80,81 @@ const COMPANY_B = {
   },
 };
 const companyContexts = new Map();
+const PLATFORM_PLAN = {
+  id: "91000000-0000-0000-0000-000000000001",
+  code: "GROWTH",
+  name: "Growth",
+  description: "Modular growth plan",
+  is_active: true,
+  created_at: "2026-10-01T00:00:00Z",
+  updated_at: "2026-10-01T00:00:00Z",
+};
+const PLATFORM_SUBSCRIPTION_ID = "92000000-0000-0000-0000-000000000001";
+const SNAPSHOT_MODULES = [
+  "people",
+  "client_contracts",
+  "finance_core",
+  "billing_receivables",
+  "procurement_payables",
+];
+let platformOverrides = [];
+let platformEntitlementRevision = 4;
+const PLATFORM_MODULES = [
+  ["people", "People & Employee Records", []],
+  ["client_contracts", "Clients & Contracts", []],
+  ["finance_core", "Finance & Accounting", []],
+  [
+    "billing_receivables",
+    "Billing & Receivables",
+    ["client_contracts", "finance_core"],
+  ],
+  ["procurement_payables", "Procurement & Payables", ["finance_core"]],
+].map(([id, display_name, hard_dependencies]) => ({
+  id,
+  display_name,
+  classification: "GENERAL_BUSINESS",
+  hard_dependencies,
+  legacy_default: true,
+}));
+
+const platformSubscription = () => ({
+  id: PLATFORM_SUBSCRIPTION_ID,
+  company: {
+    id: COMPANY_A.id,
+    code: COMPANY_A.code,
+    legal_name: COMPANY_A.legal_name,
+    trade_name: COMPANY_A.display_name,
+    is_active: true,
+  },
+  plan: PLATFORM_PLAN,
+  status: "ACTIVE",
+  policy_mode: "SUBSCRIPTION",
+  effective_module_count: COMPANY_A.effective_modules.length,
+  entitlement_revision: platformEntitlementRevision,
+  starts_at: "2026-10-01T00:00:00Z",
+  trial_ends_at: null,
+  grace_ends_at: null,
+  suspended_at: null,
+  terminated_at: null,
+  created_at: "2026-10-01T00:00:00Z",
+  updated_at: "2026-10-01T00:00:00Z",
+});
+
+const platformEntitlements = () => ({
+  subscription_id: PLATFORM_SUBSCRIPTION_ID,
+  subscription_status: "ACTIVE",
+  company: platformSubscription().company,
+  plan: PLATFORM_PLAN,
+  policy_mode: "SUBSCRIPTION",
+  plan_entitlement_revision: 4,
+  snapshot_plan_entitlement_revision: 4,
+  entitlement_revision: platformEntitlementRevision,
+  snapshot_initialized: true,
+  plan_module_ids: SNAPSHOT_MODULES,
+  snapshot_module_ids: SNAPSHOT_MODULES,
+  overrides: platformOverrides,
+  effective_module_ids: COMPANY_A.effective_modules,
+});
 
 // Two logical actors so maker/checker separation is exercised for real: the
 // maker may author and submit, the approver may approve, issue and download.
@@ -93,8 +178,23 @@ const ACTORS = {
     email: "multicompany@example.test",
     first_name: "Multi",
     last_name: "Company",
-    permissions: AUTHORING_PERMISSIONS,
+    permissions: [...AUTHORING_PERMISSIONS, "finance.view_vendor"],
     companies: [COMPANY_A, COMPANY_B],
+  },
+  platformoperator: {
+    id: APPROVER_ID,
+    email: "platformoperator@example.test",
+    first_name: "Platform",
+    last_name: "Operator",
+    permissions: [],
+    companies: [],
+    platform_capabilities: [
+      "organization.view_platform_tenant_directory",
+      "subscriptions.view_plan_catalog",
+      "subscriptions.manage_plan_catalog",
+      "subscriptions.view_commercial_subscriptions",
+      "subscriptions.manage_commercial_subscriptions",
+    ],
   },
   maker: {
     id: MAKER_ID,
@@ -246,6 +346,8 @@ const contextBody = (request, actor) => {
     })),
     selected_company: selectedCompany,
     selection_required: companies.length > 0 && !selectedCompany,
+    effective_modules: selectedCompany?.effective_modules ?? [],
+    entitlement_revision: selectedCompany?.entitlement_revision ?? 0,
   };
 };
 
@@ -540,6 +642,12 @@ createServer(async (request, response) => {
   if (path === "/api/v1/auth/me/permissions/") {
     return json(response, 200, { permissions: actor.permissions });
   }
+  if (path === "/api/v1/auth/me/platform-capabilities/") {
+    return json(response, 200, {
+      capabilities: actor.platform_capabilities ?? [],
+      can_access_platform_admin: Boolean(actor.platform_capabilities?.length),
+    });
+  }
   if (path === "/api/v1/auth/me/access-scopes/") {
     return json(response, 200, {
       is_superuser: false,
@@ -552,6 +660,68 @@ createServer(async (request, response) => {
       accessible_operational_zone_ids: [],
       assignments: [],
     });
+  }
+  if (path === "/api/v1/platform/modules/") {
+    return json(response, 200, PLATFORM_MODULES);
+  }
+  if (path === "/api/v1/platform/tenants/") {
+    return json(response, 200, [
+      {
+        id: COMPANY_A.id,
+        code: COMPANY_A.code,
+        legal_name: COMPANY_A.legal_name,
+        trade_name: COMPANY_A.display_name,
+        is_active: true,
+        country_code: "PK",
+        timezone: "Asia/Karachi",
+        default_currency: "PKR",
+        operational_status: "READY",
+        blocker_count: 0,
+        blocker_codes: [],
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+  }
+  if (path === "/api/v1/platform/plans/") {
+    return json(response, 200, [PLATFORM_PLAN]);
+  }
+  if (path === "/api/v1/platform/subscriptions/") {
+    return json(response, 200, [platformSubscription()]);
+  }
+  if (
+    path ===
+      `/api/v1/platform/subscriptions/${PLATFORM_SUBSCRIPTION_ID}/entitlements/` &&
+    request.method === "GET"
+  ) {
+    return json(response, 200, platformEntitlements());
+  }
+  if (
+    path ===
+      `/api/v1/platform/subscriptions/${PLATFORM_SUBSCRIPTION_ID}/overrides/` &&
+    request.method === "PUT"
+  ) {
+    const body = await readJsonBody(request);
+    platformOverrides = [
+      ...(body.enabled_module_ids ?? []).map((module_id) => ({
+        module_id,
+        state: "ENABLED",
+      })),
+      ...(body.disabled_module_ids ?? []).map((module_id) => ({
+        module_id,
+        state: "DISABLED",
+      })),
+    ];
+    const enabled = new Set(SNAPSHOT_MODULES);
+    for (const override of platformOverrides) {
+      if (override.state === "ENABLED") enabled.add(override.module_id);
+      else enabled.delete(override.module_id);
+    }
+    COMPANY_A.effective_modules = SNAPSHOT_MODULES.filter((moduleId) =>
+      enabled.has(moduleId),
+    );
+    platformEntitlementRevision += 1;
+    COMPANY_A.entitlement_revision = platformEntitlementRevision;
+    return json(response, 200, platformEntitlements());
   }
   if (path === "/api/v1/finance/ap-reference/payable-accounts/")
     return json(response, 200, [

@@ -1,15 +1,28 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { can, canAll, canAny } from "@/lib/auth/permissions";
 import type { CompanyContext, SessionData } from "@/lib/auth/types";
+import {
+  hasAllModules as userHasAllModules,
+  hasModule as userHasModule,
+  type ModuleId,
+} from "@/lib/modules";
 
 interface AuthContextValue extends SessionData {
   can: (permission: string) => boolean;
   canAny: (...permissions: string[]) => boolean;
   canAll: (...permissions: string[]) => boolean;
+  hasModule: (moduleId: ModuleId) => boolean;
+  hasAllModules: (...moduleIds: ModuleId[]) => boolean;
   switchingCompany: boolean;
   companySwitchError: string;
   switchCompany: (companyId: string) => Promise<boolean>;
@@ -36,6 +49,16 @@ export function AuthProvider({
   const [switchingCompany, setSwitchingCompany] = useState(false);
   const [companySwitchError, setCompanySwitchError] = useState("");
   const superuser = session.user.is_superuser;
+
+  useEffect(() => {
+    const refreshCapabilities = () => router.refresh();
+    window.addEventListener("dsms:module-not-enabled", refreshCapabilities);
+    return () =>
+      window.removeEventListener(
+        "dsms:module-not-enabled",
+        refreshCapabilities,
+      );
+  }, [router]);
 
   async function switchCompany(companyId: string) {
     if (switchingCompany) return false;
@@ -79,6 +102,10 @@ export function AuthProvider({
       canAny(session.permissions, permissions, superuser),
     canAll: (...permissions) =>
       canAll(session.permissions, permissions, superuser),
+    hasModule: (moduleId) =>
+      userHasModule(companyContext.effective_modules, moduleId),
+    hasAllModules: (...moduleIds) =>
+      userHasAllModules(companyContext.effective_modules, ...moduleIds),
     switchingCompany,
     companySwitchError,
     switchCompany,

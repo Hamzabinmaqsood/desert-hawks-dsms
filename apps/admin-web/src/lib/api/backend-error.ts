@@ -23,6 +23,17 @@ export function backendErrorBody(
       ? (result.data as Record<string, unknown>)
       : null;
 
+  if (
+    result.status === 403 &&
+    data?.code === "module_not_enabled" &&
+    Array.isArray(data.required_modules)
+  ) {
+    return {
+      code: ["module_not_enabled"],
+      non_field_errors: ["This module is not enabled for this Company."],
+    };
+  }
+
   if (data) {
     for (const [key, value] of Object.entries(data)) {
       if (ENVELOPE_KEYS.has(key)) continue;

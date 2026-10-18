@@ -19,6 +19,7 @@ import {
 import type {
   AccessScopes,
   CompanyContextBootstrap,
+  PlatformCapabilities,
   SessionData,
 } from "@/lib/auth/types";
 
@@ -58,24 +59,34 @@ async function fetchIdentity(
     ...backendSessionHeaders(reader),
     Authorization: `Bearer ${access}`,
   };
-  const [context, permissions, scopes] = await Promise.all([
-    backendRequest<CompanyContextBootstrap>("auth/company-context/", {
-      headers,
-    }),
-    backendRequest<{ permissions: string[] }>("auth/me/permissions/", {
-      headers,
-    }),
-    backendRequest<AccessScopes>("auth/me/access-scopes/", { headers }),
-  ]);
-  if ([context, permissions, scopes].some((result) => result.status === 401))
+  const [context, permissions, scopes, platformCapabilities] =
+    await Promise.all([
+      backendRequest<CompanyContextBootstrap>("auth/company-context/", {
+        headers,
+      }),
+      backendRequest<{ permissions: string[] }>("auth/me/permissions/", {
+        headers,
+      }),
+      backendRequest<AccessScopes>("auth/me/access-scopes/", { headers }),
+      backendRequest<PlatformCapabilities>("auth/me/platform-capabilities/", {
+        headers,
+      }),
+    ]);
+  if (
+    [context, permissions, scopes, platformCapabilities].some(
+      (result) => result.status === 401,
+    )
+  )
     return { status: 401 };
   if (
     !context.ok ||
     !permissions.ok ||
     !scopes.ok ||
+    !platformCapabilities.ok ||
     !context.data ||
     !permissions.data ||
-    !scopes.data
+    !scopes.data ||
+    !platformCapabilities.data
   ) {
     return { status: 503 };
   }
@@ -87,10 +98,13 @@ async function fetchIdentity(
       user: context.data.user,
       permissions: permissions.data.permissions,
       scopes: scopes.data,
+      platform_capabilities: platformCapabilities.data,
       company_context: {
         companies: context.data.companies,
         selected_company: context.data.selected_company,
         selection_required: context.data.selection_required,
+        effective_modules: context.data.effective_modules,
+        entitlement_revision: context.data.entitlement_revision,
       },
     } satisfies SessionData,
   };

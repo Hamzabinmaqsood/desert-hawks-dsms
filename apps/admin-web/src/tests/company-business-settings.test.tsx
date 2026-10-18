@@ -66,7 +66,13 @@ function session(): SessionData {
       accessible_operational_zone_ids: [],
       assignments: [],
     },
+    platform_capabilities: {
+      capabilities: [],
+      can_access_platform_admin: false,
+    },
     company_context: {
+      effective_modules: [],
+      entitlement_revision: 0,
       companies: [companyA],
       selected_company: companyA,
       selection_required: false,
@@ -239,6 +245,8 @@ describe("Company business settings", () => {
             companies: current.company_context.companies,
             selected_company: companyB,
             selection_required: false,
+            effective_modules: [],
+            entitlement_revision: 1,
           });
         const settingsGets = fetchMock.mock.calls.filter(
           ([url]) => String(url) === "/api/auth/company-business-settings",

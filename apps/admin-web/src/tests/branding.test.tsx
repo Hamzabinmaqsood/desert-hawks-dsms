@@ -62,7 +62,13 @@ function session(branding: CompanyBranding = alphaBranding): SessionData {
       accessible_operational_zone_ids: [],
       assignments: [],
     },
+    platform_capabilities: {
+      capabilities: [],
+      can_access_platform_admin: false,
+    },
     company_context: {
+      effective_modules: [],
+      entitlement_revision: 0,
       companies: [company],
       selected_company: company,
       selection_required: false,
@@ -201,6 +207,8 @@ describe("Company branding", () => {
               companies: [...session().company_context.companies, companyB],
               selected_company: companyB,
               selection_required: false,
+              effective_modules: [],
+              entitlement_revision: 1,
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           ),
@@ -238,6 +246,8 @@ describe("Company branding", () => {
       view({
         ...session(),
         company_context: {
+          effective_modules: [],
+          entitlement_revision: 0,
           companies: [],
           selected_company: null,
           selection_required: false,

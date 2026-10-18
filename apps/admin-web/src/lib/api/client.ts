@@ -4,6 +4,7 @@ export class ApiError extends Error {
     message: string,
     public readonly fieldErrors: Record<string, string[]> = {},
     public readonly nonFieldErrors: string[] = [],
+    public readonly code = "",
   ) {
     super(message);
     this.name = "ApiError";
@@ -20,12 +21,18 @@ export interface ApiFetchOptions extends RequestInit {
 function normalizedError(status: number, body: unknown): ApiError {
   const fieldErrors: Record<string, string[]> = {};
   const nonFieldErrors: string[] = [];
+  let code = "";
   if (body && typeof body === "object" && !Array.isArray(body)) {
     for (const [key, value] of Object.entries(body)) {
       const messages = (Array.isArray(value) ? value : [value]).filter(
         (item): item is string => typeof item === "string",
       );
-      if (key === "detail" || key === "message" || key === "non_field_errors")
+      if (key === "code") code = messages[0] ?? "";
+      else if (
+        key === "detail" ||
+        key === "message" ||
+        key === "non_field_errors"
+      )
         nonFieldErrors.push(...messages);
       else if (messages.length) fieldErrors[key] = messages;
     }
@@ -35,7 +42,7 @@ function normalizedError(status: number, body: unknown): ApiError {
     (status === 401
       ? "Your session is not authenticated."
       : "The request could not be completed.");
-  return new ApiError(status, message, fieldErrors, nonFieldErrors);
+  return new ApiError(status, message, fieldErrors, nonFieldErrors, code);
 }
 
 export async function apiFetch<T>(
@@ -66,6 +73,11 @@ export async function apiFetch<T>(
   const isJson =
     response.headers.get("content-type")?.includes("application/json") ?? false;
   const body: unknown = isJson ? await response.json() : await response.text();
-  if (!response.ok) throw normalizedError(response.status, body);
+  if (!response.ok) {
+    const error = normalizedError(response.status, body);
+    if (error.code === "module_not_enabled")
+      window.dispatchEvent(new Event("dsms:module-not-enabled"));
+    throw error;
+  }
   return body as T;
 }

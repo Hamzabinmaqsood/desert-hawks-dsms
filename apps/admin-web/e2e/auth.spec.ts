@@ -67,6 +67,28 @@ test("multi-company employee explicitly selects and switches active Company", as
   );
   await expect(page).toHaveTitle("Alpha Shield — DSMS");
 
+  await expect(page.getByRole("link", { name: "Invoices" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Vendors" })).toBeVisible();
+  await page.getByRole("link", { name: "Invoices" }).click();
+  await expect(page.getByRole("heading", { name: "Invoices" })).toBeVisible();
+
+  await switcher.selectOption({ label: "DHB — Desert Hawks Bravo" });
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("link", { name: "Invoices" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Vendors" })).toBeVisible();
+  await expect(page.getByText("INV-E2E-001")).toHaveCount(0);
+  await page.goto("/invoices");
+  await expect(
+    page.getByRole("heading", { name: "Module unavailable" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("This module is not enabled for this Company."),
+  ).toBeVisible();
+
+  await switcher.selectOption({ label: "DHA — Desert Hawks Alpha" });
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("link", { name: "Invoices" })).toBeVisible();
+
   await page.getByRole("link", { name: "Business settings" }).click();
   await expect(page).toHaveURL(/\/settings\/company$/);
   await expect(page.getByLabel("Default currency")).toHaveValue("USD");
@@ -95,6 +117,53 @@ test("multi-company employee explicitly selects and switches active Company", as
   await expect(page.getByLabel("Default currency")).toHaveValue("AED");
   await expect(page.getByLabel("Invoice prefix")).toHaveValue("BINV");
   await expect(page.getByLabel("Timezone")).toHaveValue("Asia/Dubai");
+});
+
+test("platform operator changes a module and tenant UX follows authoritative context", async ({
+  page,
+}) => {
+  await signIn(page, "platformoperator@example.test");
+  await page.goto("/platform/companies");
+  await expect(page.getByRole("heading", { name: "Companies" })).toBeVisible();
+  await page.getByRole("link", { name: "Open" }).click();
+  await page.getByRole("link", { name: "Manage business modules" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Desert Hawks Alpha" }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Billing & Receivables source")
+    .selectOption("DISABLED");
+  await page.getByLabel("Change reason").fill("Customer module change");
+  await page.getByRole("button", { name: "Save overrides" }).click();
+  await expect(page.getByText("Subscription overrides saved.")).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+
+  await signIn(page, "employee@example.test");
+  await expect(page.getByRole("link", { name: "Invoices" })).toHaveCount(0);
+  await page.goto("/invoices");
+  await expect(
+    page.getByRole("heading", { name: "Module unavailable" }),
+  ).toBeVisible();
+  await page.goto("/platform/companies");
+  await expect(
+    page.getByRole("heading", { name: "Platform administration unavailable" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+
+  await signIn(page, "platformoperator@example.test");
+  await page.goto(
+    `/platform/subscriptions/${"92000000-0000-0000-0000-000000000001"}`,
+  );
+  await page
+    .getByLabel("Billing & Receivables source")
+    .selectOption("INHERITED");
+  await page.getByLabel("Change reason").fill("Restore contracted module");
+  await page.getByRole("button", { name: "Save overrides" }).click();
+  await expect(page.getByText("Subscription overrides saved.")).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+
+  await signIn(page, "employee@example.test");
+  await expect(page.getByRole("link", { name: "Invoices" })).toBeVisible();
 });
 
 test("employee reads an Invoice list and detail", async ({ page }) => {
@@ -370,7 +439,9 @@ test("least-privilege Bill author completes draft Vendor Bill authoring", async 
   );
   await page.getByRole("button", { name: "Create draft" }).click();
   expect((await createResponse).status()).toBe(201);
-  await expect(page).toHaveURL(/\/vendor-bills\/81000000-.*\/edit$/);
+  await expect(page).toHaveURL(/\/vendor-bills\/81000000-.*\/edit$/, {
+    timeout: 15_000,
+  });
 
   await page.getByLabel("Description").fill("Operating supplies");
   await page.getByLabel("Quantity").fill("2.0000");

@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { useEffect, type CSSProperties, type ReactNode } from "react";
 
 import { CompanySwitcher } from "@/components/auth/company-switcher";
@@ -10,28 +11,35 @@ import { resolveCompanyBranding } from "@/lib/branding";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const session = useAuth();
+  const pathname = usePathname();
+  const platformArea = pathname.startsWith("/platform");
   const name = [session.user.first_name, session.user.last_name]
     .filter(Boolean)
     .join(" ");
   const selectedCompany = session.company_context.selected_company;
-  const branding = resolveCompanyBranding(selectedCompany);
+  const branding = resolveCompanyBranding(
+    platformArea ? null : selectedCompany,
+  );
   const tenantStyle = {
     "--tenant-brand": branding.primary_color,
     "--tenant-accent": branding.accent_color,
   } as CSSProperties;
   useEffect(() => {
-    document.title = selectedCompany
-      ? `${branding.display_name} — DSMS`
-      : "DSMS — Security Management Platform";
-    return () => {
-      document.title = "DSMS — Security Management Platform";
-    };
-  }, [branding.display_name, selectedCompany]);
+    document.title = platformArea
+      ? "Platform administration — DSMS"
+      : selectedCompany
+        ? `${branding.display_name} — DSMS`
+        : "DSMS — Security Management Platform";
+  }, [branding.display_name, platformArea, selectedCompany]);
   return (
     <div className="app-shell" style={tenantStyle}>
       <Sidebar
         permissions={session.permissions}
+        effectiveModules={session.company_context.effective_modules}
         isSuperuser={session.user.is_superuser}
+        canAccessPlatformAdmin={
+          session.platform_capabilities.can_access_platform_admin
+        }
         branding={branding}
       />
       <div className="app-workspace">
@@ -41,12 +49,14 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span>{session.user.email}</span>
           </div>
           <div className="topbar-actions">
-            <CompanySwitcher />
+            {!platformArea ? <CompanySwitcher /> : null}
             <LogoutButton />
           </div>
         </header>
         <main className="content">
-          {session.company_context.companies.length === 0 ? (
+          {platformArea ? (
+            children
+          ) : session.company_context.companies.length === 0 ? (
             <section className="company-context-notice">
               <h1>No Company access</h1>
               <p>

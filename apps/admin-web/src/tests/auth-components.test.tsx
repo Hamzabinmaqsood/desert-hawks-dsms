@@ -47,7 +47,13 @@ const session: SessionData = {
     accessible_operational_zone_ids: [],
     assignments: [],
   },
+  platform_capabilities: {
+    capabilities: [],
+    can_access_platform_admin: false,
+  },
   company_context: {
+    effective_modules: ["billing_receivables"],
+    entitlement_revision: 0,
     companies: [
       {
         id: "company-a",
@@ -184,6 +190,8 @@ describe("authentication components", () => {
       view({
         ...session,
         company_context: {
+          effective_modules: [],
+          entitlement_revision: 0,
           companies: [],
           selected_company: null,
           selection_required: false,
@@ -231,6 +239,8 @@ describe("authentication components", () => {
               companies: [...session.company_context.companies, companyB],
               selected_company: companyB,
               selection_required: false,
+              effective_modules: ["procurement_payables"],
+              entitlement_revision: 2,
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           ),
@@ -241,6 +251,8 @@ describe("authentication components", () => {
         session={{
           ...session,
           company_context: {
+            effective_modules: [],
+            entitlement_revision: 0,
             companies: [...session.company_context.companies, companyB],
             selected_company: null,
             selection_required: true,
@@ -290,6 +302,8 @@ describe("authentication components", () => {
         session={{
           ...session,
           company_context: {
+            effective_modules: session.company_context.effective_modules,
+            entitlement_revision: session.company_context.entitlement_revision,
             companies: [...session.company_context.companies, companyB],
             selected_company: session.company_context.selected_company,
             selection_required: false,
@@ -328,6 +342,8 @@ describe("authentication components", () => {
         session={{
           ...session,
           company_context: {
+            effective_modules: [],
+            entitlement_revision: 0,
             companies: [],
             selected_company: null,
             selection_required: false,
