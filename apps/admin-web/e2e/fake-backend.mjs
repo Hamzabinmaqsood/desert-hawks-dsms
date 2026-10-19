@@ -166,6 +166,44 @@ const AUTHORING_PERMISSIONS = [
 ];
 
 const ACTORS = {
+  workspaceadmin: {
+    id: MAKER_ID,
+    email: "workspaceadmin@example.test",
+    first_name: "Workspace",
+    last_name: "Administrator",
+    permissions: [
+      "workforce.view_employee",
+      "workforce.add_employee",
+      "workforce.change_employee",
+      "workforce.view_employeeaddress",
+      "workforce.add_employeeaddress",
+      "workforce.view_emergencycontact",
+      "workforce.add_emergencycontact",
+      "contracts.view_client",
+      "contracts.add_client",
+      "contracts.change_client",
+      "contracts.view_clientcontact",
+      "contracts.add_clientcontact",
+      "contracts.view_servicecontract",
+      "contracts.add_servicecontract",
+      "contracts.change_servicecontract",
+      "contracts.view_contractservice",
+      "contracts.view_contractcommercialterms",
+      "contracts.view_contractamendment",
+      "contracts.view_servicelevelagreement",
+    ],
+  },
+  workspaceviewer: {
+    id: MAKER_ID,
+    email: "workspaceviewer@example.test",
+    first_name: "Workspace",
+    last_name: "Viewer",
+    permissions: [
+      "workforce.view_employee",
+      "contracts.view_client",
+      "contracts.view_servicecontract",
+    ],
+  },
   employee: {
     id: MAKER_ID,
     email: "employee@example.test",
@@ -178,7 +216,13 @@ const ACTORS = {
     email: "multicompany@example.test",
     first_name: "Multi",
     last_name: "Company",
-    permissions: [...AUTHORING_PERMISSIONS, "finance.view_vendor"],
+    permissions: [
+      ...AUTHORING_PERMISSIONS,
+      "finance.view_vendor",
+      "workforce.view_employee",
+      "contracts.view_client",
+      "contracts.view_servicecontract",
+    ],
     companies: [COMPANY_A, COMPANY_B],
   },
   platformoperator: {
@@ -554,6 +598,110 @@ const vendorBody = () => ({
   payable_account_name: "Trade Payables",
   created_at: "2026-09-13T09:00:00Z",
   updated_at: "2026-09-13T09:00:00Z",
+});
+
+const EMPLOYEE_ID = "61000000-0000-0000-0000-000000000001";
+const INDUSTRY_ID = "62000000-0000-0000-0000-000000000001";
+const CLIENT_ID = "63000000-0000-0000-0000-000000000001";
+const CONTACT_ID = "64000000-0000-0000-0000-000000000001";
+const GENERIC_CONTRACT_ID = "65000000-0000-0000-0000-000000000001";
+let workspaceEmployee = null;
+let workspaceClient = null;
+let workspaceContact = null;
+let workspaceContract = null;
+const employeeBody = () => ({
+  id: EMPLOYEE_ID,
+  company: COMPANY_A.id,
+  company_name: COMPANY_A.legal_name,
+  user: null,
+  user_email: null,
+  employee_number: "EMP-E2E-001",
+  first_name: "Amina",
+  middle_name: "",
+  last_name: "Khan",
+  full_name: "Amina Khan",
+  preferred_name: "Amina",
+  father_or_spouse_name: "",
+  gender: "UNSPECIFIED",
+  date_of_birth: null,
+  marital_status: "UNSPECIFIED",
+  nationality: "PK",
+  national_identity_number: null,
+  masked_national_identity_number: "",
+  national_identity_expiry: null,
+  personal_email: workspaceEmployee?.personal_email ?? "amina@example.test",
+  mobile_number: workspaceEmployee?.mobile_number ?? "03000000000",
+  alternate_mobile_number: "",
+  employee_type: "OFFICE_STAFF",
+  employment_type: "PERMANENT",
+  employment_status: "DRAFT",
+  joining_date: "2026-10-19",
+  confirmation_date: null,
+  probation_end_date: null,
+  exit_date: null,
+  branch: null,
+  branch_name: null,
+  department: null,
+  department_name: null,
+  designation: null,
+  designation_name: null,
+  notes: null,
+  is_active: true,
+  created_at: "2026-10-19T00:00:00Z",
+  updated_at: "2026-10-19T00:00:00Z",
+});
+const clientBody = () => ({
+  id: CLIENT_ID,
+  company: COMPANY_A.id,
+  client_code: "CLI-E2E-001",
+  legal_name: "Acme Advisory Limited",
+  trade_name: "Acme Advisory",
+  industry: INDUSTRY_ID,
+  industry_name: "Professional services",
+  registration_number: "REG-E2E",
+  tax_number: "",
+  website: "",
+  main_email: "hello@acme.test",
+  main_phone: "",
+  billing_address: "",
+  head_office_address: "",
+  city: "Karachi",
+  province_or_state: "Sindh",
+  country_code: "PK",
+  status: workspaceClient?.status ?? "PROSPECT",
+  notes: "",
+  account_manager: null,
+  account_manager_name: null,
+  created_at: "2026-10-19T00:00:00Z",
+  updated_at: "2026-10-19T00:00:00Z",
+});
+const contractBody = () => ({
+  id: GENERIC_CONTRACT_ID,
+  company: COMPANY_A.id,
+  client: CLIENT_ID,
+  client_name: "Acme Advisory Limited",
+  contract_number: "CTR-E2E-001",
+  contract_type: "PROJECT",
+  title: "Advisory services agreement",
+  description: "General business advisory services",
+  signed_date: null,
+  start_date: "2026-10-19",
+  end_date: null,
+  notice_period_days: null,
+  auto_renew: false,
+  currency: "PKR",
+  status: "DRAFT",
+  client_reference: "",
+  purchase_order_reference: "",
+  internal_reference: "",
+  primary_client_contact: null,
+  primary_client_contact_name: null,
+  account_manager: null,
+  account_manager_name: null,
+  approved_at: null,
+  activated_at: null,
+  created_at: "2026-10-19T00:00:00Z",
+  updated_at: "2026-10-19T00:00:00Z",
 });
 
 function receiptBody() {
@@ -986,6 +1134,172 @@ createServer(async (request, response) => {
       next: null,
       previous: null,
       results: vendorPayment ? [vendorPayment] : [],
+    });
+
+  const selectedCompanyId = contextBody(request, actor).selected_company?.id;
+  if (
+    [
+      "/api/v1/organization/branches/",
+      "/api/v1/organization/departments/",
+      "/api/v1/organization/designations/",
+    ].some((prefix) => path?.startsWith(prefix))
+  )
+    return json(response, 200, {
+      count: 0,
+      next: null,
+      previous: null,
+      results: [],
+    });
+  if (
+    path?.startsWith("/api/v1/workforce/employees/?") &&
+    request.method === "GET"
+  )
+    return json(response, 200, {
+      count: workspaceEmployee && selectedCompanyId === COMPANY_A.id ? 1 : 0,
+      next: null,
+      previous: null,
+      results:
+        workspaceEmployee && selectedCompanyId === COMPANY_A.id
+          ? [employeeBody()]
+          : [],
+    });
+  if (path === "/api/v1/workforce/employees/" && request.method === "POST") {
+    workspaceEmployee = await readJsonBody(request);
+    return json(response, 201, employeeBody());
+  }
+  if (
+    path === `/api/v1/workforce/employees/${EMPLOYEE_ID}/` &&
+    request.method === "GET"
+  )
+    return workspaceEmployee && selectedCompanyId === COMPANY_A.id
+      ? json(response, 200, employeeBody())
+      : json(response, 404, { detail: "Not found." });
+  if (
+    path === `/api/v1/workforce/employees/${EMPLOYEE_ID}/` &&
+    request.method === "PATCH"
+  ) {
+    workspaceEmployee = {
+      ...workspaceEmployee,
+      ...(await readJsonBody(request)),
+    };
+    return json(response, 200, employeeBody());
+  }
+  if (
+    path?.startsWith(`/api/v1/workforce/employees/${EMPLOYEE_ID}/`) &&
+    request.method === "GET"
+  )
+    return json(response, 200, []);
+  if (path === `/api/v1/documents/employees/${EMPLOYEE_ID}/documents/`)
+    return json(response, 200, []);
+
+  if (
+    path?.startsWith("/api/v1/contracts/industries/") &&
+    request.method === "GET"
+  )
+    return json(response, 200, {
+      count: selectedCompanyId === COMPANY_A.id ? 1 : 0,
+      next: null,
+      previous: null,
+      results:
+        selectedCompanyId === COMPANY_A.id
+          ? [
+              {
+                id: INDUSTRY_ID,
+                company: COMPANY_A.id,
+                code: "PROF",
+                name: "Professional services",
+                is_active: true,
+              },
+            ]
+          : [],
+    });
+  if (
+    path?.startsWith("/api/v1/contracts/clients/?") &&
+    request.method === "GET"
+  )
+    return json(response, 200, {
+      count: workspaceClient && selectedCompanyId === COMPANY_A.id ? 1 : 0,
+      next: null,
+      previous: null,
+      results:
+        workspaceClient && selectedCompanyId === COMPANY_A.id
+          ? [clientBody()]
+          : [],
+    });
+  if (path === "/api/v1/contracts/clients/" && request.method === "POST") {
+    workspaceClient = await readJsonBody(request);
+    return json(response, 201, clientBody());
+  }
+  if (
+    path === `/api/v1/contracts/clients/${CLIENT_ID}/activate/` &&
+    request.method === "POST"
+  ) {
+    workspaceClient = { ...workspaceClient, status: "ACTIVE" };
+    return json(response, 200, clientBody());
+  }
+  if (path === `/api/v1/contracts/clients/${CLIENT_ID}/`)
+    return workspaceClient && selectedCompanyId === COMPANY_A.id
+      ? json(response, 200, clientBody())
+      : json(response, 404, { detail: "Not found." });
+  if (
+    path?.startsWith("/api/v1/contracts/client-contacts/?") &&
+    request.method === "GET"
+  )
+    return json(response, 200, {
+      count: workspaceContact ? 1 : 0,
+      next: null,
+      previous: null,
+      results: workspaceContact ? [workspaceContact] : [],
+    });
+  if (
+    path === "/api/v1/contracts/client-contacts/" &&
+    request.method === "POST"
+  ) {
+    workspaceContact = {
+      id: CONTACT_ID,
+      ...(await readJsonBody(request)),
+      designation: "",
+      department: "",
+      office_phone: "",
+      notes: "",
+      is_active: true,
+    };
+    return json(response, 201, workspaceContact);
+  }
+  if (
+    path?.startsWith("/api/v1/contracts/contracts/?") &&
+    request.method === "GET"
+  )
+    return json(response, 200, {
+      count: workspaceContract && selectedCompanyId === COMPANY_A.id ? 1 : 0,
+      next: null,
+      previous: null,
+      results:
+        workspaceContract && selectedCompanyId === COMPANY_A.id
+          ? [contractBody()]
+          : [],
+    });
+  if (path === "/api/v1/contracts/contracts/" && request.method === "POST") {
+    workspaceContract = await readJsonBody(request);
+    return json(response, 201, contractBody());
+  }
+  if (path === `/api/v1/contracts/contracts/${GENERIC_CONTRACT_ID}/`)
+    return workspaceContract && selectedCompanyId === COMPANY_A.id
+      ? json(response, 200, contractBody())
+      : json(response, 404, { detail: "Not found." });
+  if (
+    [
+      "/api/v1/contracts/contract-services/?",
+      "/api/v1/contracts/commercial-terms/?",
+      "/api/v1/contracts/contract-amendments/?",
+      "/api/v1/contracts/slas/?",
+    ].some((prefix) => path?.startsWith(prefix))
+  )
+    return json(response, 200, {
+      count: 0,
+      next: null,
+      previous: null,
+      results: [],
     });
   if (path === "/api/v1/billing/billing-profiles/?is_active=true") {
     return json(response, 200, {

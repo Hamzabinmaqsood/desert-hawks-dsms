@@ -120,7 +120,7 @@ export const defaultDashboardWidgets: DashboardWidgetDefinition[] = [
     id: "setup-guidance",
     title: "Company setup",
     order: 20,
-    render: () => (
+    render: ({ auth }) => (
       <ul className="setup-list">
         <li>
           <Link href="/settings/company">Review Company settings</Link>
@@ -128,7 +128,62 @@ export const defaultDashboardWidgets: DashboardWidgetDefinition[] = [
         <li>
           <Link href="/settings/branding">Configure Company branding</Link>
         </li>
+        {auth.hasModule("people") && auth.can("workforce.add_employee") ? (
+          <li>
+            <Link href="/employees/new">Add the first employee</Link>
+          </li>
+        ) : null}
+        {auth.hasModule("client_contracts") &&
+        auth.can("contracts.add_client") ? (
+          <li>
+            <Link href="/clients/new">Add the first client</Link>
+          </li>
+        ) : null}
+        {auth.hasModule("client_contracts") &&
+        auth.can("contracts.add_servicecontract") ? (
+          <li>
+            <Link href="/contracts/new">Create the first contract</Link>
+          </li>
+        ) : null}
       </ul>
+    ),
+  },
+  {
+    id: "people-actions",
+    title: "People",
+    order: 25,
+    moduleId: "people",
+    permissions: ["workforce.view_employee"],
+    render: ({ auth }) => (
+      <div className="quick-actions">
+        <Link href="/employees">View employees</Link>
+        {auth.can("workforce.add_employee") ? (
+          <Link href="/employees/new">Add employee</Link>
+        ) : null}
+      </div>
+    ),
+  },
+  {
+    id: "client-actions",
+    title: "Clients & contracts",
+    order: 27,
+    moduleId: "client_contracts",
+    permissions: ["contracts.view_client", "contracts.view_servicecontract"],
+    render: ({ auth }) => (
+      <div className="quick-actions">
+        {auth.can("contracts.view_client") ? (
+          <Link href="/clients">View clients</Link>
+        ) : null}
+        {auth.can("contracts.add_client") ? (
+          <Link href="/clients/new">Add client</Link>
+        ) : null}
+        {auth.can("contracts.view_servicecontract") ? (
+          <Link href="/contracts">View contracts</Link>
+        ) : null}
+        {auth.can("contracts.add_servicecontract") ? (
+          <Link href="/contracts/new">Create contract</Link>
+        ) : null}
+      </div>
     ),
   },
   {

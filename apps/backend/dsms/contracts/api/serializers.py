@@ -433,3 +433,48 @@ def serializer_for(model: type[django_models.Model]) -> type[TenantSafeContractS
 
 
 SERIALIZERS = {model.__name__: serializer_for(model) for model in FIELDS}
+
+
+class ClientSerializer(TenantSafeContractSerializer):
+    industry_name = serializers.CharField(source="industry.name", read_only=True)
+    account_manager_name = serializers.CharField(
+        source="account_manager.full_name", read_only=True, default=None
+    )
+
+    class Meta:
+        model = models.Client
+        fields = FIELDS[models.Client] + (
+            "industry_name",
+            "account_manager_name",
+        )
+        read_only_fields = READ_ONLY[models.Client] + (
+            "industry_name",
+            "account_manager_name",
+        )
+
+
+class ServiceContractSerializer(TenantSafeContractSerializer):
+    client_name = serializers.CharField(source="client.legal_name", read_only=True)
+    primary_client_contact_name = serializers.CharField(
+        source="primary_client_contact.name", read_only=True, default=None
+    )
+    account_manager_name = serializers.CharField(
+        source="account_manager.full_name", read_only=True, default=None
+    )
+
+    class Meta:
+        model = models.ServiceContract
+        fields = FIELDS[models.ServiceContract] + (
+            "client_name",
+            "primary_client_contact_name",
+            "account_manager_name",
+        )
+        read_only_fields = READ_ONLY[models.ServiceContract] + (
+            "client_name",
+            "primary_client_contact_name",
+            "account_manager_name",
+        )
+
+
+SERIALIZERS["Client"] = ClientSerializer
+SERIALIZERS["ServiceContract"] = ServiceContractSerializer

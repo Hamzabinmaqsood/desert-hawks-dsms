@@ -163,6 +163,49 @@ def test_contract_clients_hide_corruption_and_reject_cross_company_for_multi_com
     )
 
 
+def test_generic_client_contract_queries_are_bounded_and_presentable() -> None:
+    company_a, company_b = CompanyFactory.create_batch(2)
+    actor = UserFactory.create()
+    for company in (company_a, company_b):
+        grant(
+            actor,
+            company,
+            "contracts",
+            "view_client",
+            "view_servicecontract",
+        )
+    industry_a, client_a, contract_a = contract_graph(company_a, "GENERAL-A", actor)
+    contract_graph(company_a, "UNRELATED-A", actor)
+    contract_graph(company_b, "GENERAL-B", actor)
+    client_a.trade_name = "Acme Advisory"
+    client_a.save(update_fields=["trade_name"])
+    api = APIClient()
+    api.force_authenticate(actor)
+
+    clients = api.get(
+        "/api/v1/contracts/clients/",
+        {"company": company_a.pk, "search": "Advisory", "ordering": "legal_name"},
+    )
+    assert clients.status_code == 200
+    client_rows = rows(clients)
+    assert [item["id"] for item in client_rows] == [str(client_a.pk)]
+    assert client_rows[0]["industry_name"] == industry_a.name
+
+    contracts = api.get(
+        "/api/v1/contracts/contracts/",
+        {
+            "company": company_a.pk,
+            "client": client_a.pk,
+            "search": "GENERAL-A",
+            "ordering": "contract_number",
+        },
+    )
+    assert contracts.status_code == 200
+    contract_rows = rows(contracts)
+    assert [item["id"] for item in contract_rows] == [str(contract_a.pk)]
+    assert contract_rows[0]["client_name"] == client_a.legal_name
+
+
 def test_contract_dashboard_company_scope_and_inactive_company() -> None:
     company_a, company_b = CompanyFactory.create_batch(2)
     actor = UserFactory.create()

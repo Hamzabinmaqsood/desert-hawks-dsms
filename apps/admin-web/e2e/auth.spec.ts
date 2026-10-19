@@ -6,13 +6,14 @@ const DRAFT_INVOICE_ID = "90000000-0000-0000-0000-000000000001";
 const VENDOR_BILL_ACCOUNT_ID = "50000000-0000-0000-0000-000000000300";
 const COMPANY_A_ID = "00000000-0000-0000-0000-000000000002";
 const COMPANY_B_ID = "00000000-0000-0000-0000-000000000003";
+const INDUSTRY_ID = "62000000-0000-0000-0000-000000000001";
 
 async function signIn(page: Page, email: string) {
   await page.goto("/login");
   await page.getByLabel("Work email").fill(email);
   await page.getByLabel("Password").fill(randomUUID());
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15_000 });
 }
 
 test("employee signs in, uses the protected shell, and signs out", async ({
@@ -648,4 +649,133 @@ test("least-privilege payment maker and checker settle a posted Vendor Bill", as
   await expect(page.getByText("70.00").first()).toBeVisible();
   await expect(page.getByText("50.00").first()).toBeVisible();
   await expect(page.getByRole("link", { name: "PV-E2E-001" })).toBeVisible();
+});
+
+test("general-business administrator completes People and Client Contract setup without security traffic", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const securityRequests: string[] = [];
+  page.on("request", (request) => {
+    if (
+      /\/api\/(?:client-contracts\/(?:sites|posts|staffing)|people\/readiness\/guards)/.test(
+        request.url(),
+      )
+    )
+      securityRequests.push(request.url());
+  });
+  await signIn(page, "workspaceadmin@example.test");
+  await expect(
+    page
+      .getByLabel("Primary navigation")
+      .getByRole("heading", { name: "People" }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByLabel("Primary navigation")
+      .getByRole("heading", { name: "Clients" }),
+  ).toBeVisible();
+
+  await page.getByRole("link", { name: "Employees", exact: true }).click();
+  await page.getByRole("link", { name: "Add employee" }).click();
+  await page.getByLabel("Employee number").fill("EMP-E2E-001");
+  await page.getByLabel("First name").fill("Amina");
+  await page.getByLabel("Last name").fill("Khan");
+  await page.getByLabel("Mobile number").fill("03000000000");
+  await page.getByRole("button", { name: "Save employee" }).click();
+  await expect(page).toHaveURL(/\/employees\/61000000-/, { timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: "Amina Khan" })).toBeVisible();
+  await page.getByRole("link", { name: "Edit employee" }).click();
+  await page.getByLabel("Personal email").fill("amina.updated@example.test");
+  await page.getByRole("button", { name: "Save employee" }).click();
+  await expect(page.getByText("amina.updated@example.test")).toBeVisible();
+
+  await page.getByRole("link", { name: "Clients", exact: true }).click();
+  await page.getByRole("link", { name: "Add client" }).click();
+  await page
+    .getByRole("textbox", { name: "Client code", exact: true })
+    .fill("CLI-E2E-001");
+  await page.getByLabel("Legal name").fill("Acme Advisory Limited");
+  await page.getByLabel("Trade name").fill("Acme Advisory");
+  await page.getByLabel("Industry").selectOption(INDUSTRY_ID);
+  await page.getByLabel("Main email").fill("hello@acme.test");
+  await page.getByRole("button", { name: "Save client" }).click();
+  await expect(page).toHaveURL(/\/clients\/63000000-/, { timeout: 15_000 });
+  await page.getByRole("button", { name: "Activate" }).click();
+  await expect(page.getByText("Active").first()).toBeVisible();
+  await page.locator("summary", { hasText: "Add contact" }).click();
+  await page.getByLabel("Name").last().fill("Fatima Ali");
+  await page.getByLabel("Email").last().fill("fatima@acme.test");
+  await page.getByRole("button", { name: "Add contact" }).click();
+  await expect(page.getByText("Fatima Ali")).toBeVisible();
+
+  await page.getByRole("link", { name: "Create contract" }).click();
+  await page
+    .getByRole("textbox", { name: "Contract number", exact: true })
+    .fill("CTR-E2E-001");
+  await page.getByLabel("Title").fill("Advisory services agreement");
+  await page.getByLabel("Contract type").selectOption("PROJECT");
+  await page.getByLabel("Start date").fill("2026-10-19");
+  await page.getByRole("button", { name: "Save contract" }).click();
+  await expect(page).toHaveURL(/\/contracts\/65000000-/, { timeout: 15_000 });
+  await expect(
+    page.getByRole("heading", { name: "Advisory services agreement" }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Contracts", exact: true }).click();
+  await expect(
+    page.getByRole("link", { name: "Advisory services agreement" }),
+  ).toBeVisible();
+  await expect(page.locator("main")).not.toContainText(
+    /Security Site|Security Post|staffing requirement/i,
+  );
+  expect(securityRequests).toEqual([]);
+});
+
+test("Company switching removes stale People and Client Contract capabilities", async ({
+  page,
+}) => {
+  await signIn(page, "multicompany@example.test");
+  const switcher = page.getByLabel("Active Company");
+  await switcher.selectOption(COMPANY_A_ID);
+  await expect(
+    page.getByRole("link", { name: "Employees", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Employees", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Amina Khan" })).toBeVisible();
+
+  await page.getByLabel("Active Company").selectOption(COMPANY_B_ID);
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(
+    page.getByRole("link", { name: "Employees", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Clients", exact: true }),
+  ).toHaveCount(0);
+  await page.goto("/employees");
+  await expect(
+    page.getByRole("heading", { name: "Module unavailable" }),
+  ).toBeVisible();
+  await expect(page.getByText("Amina Khan")).toHaveCount(0);
+
+  await page.getByLabel("Active Company").selectOption(COMPANY_A_ID);
+  await expect(
+    page.getByRole("link", { name: "Employees", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Employees", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Amina Khan" })).toBeVisible();
+});
+
+test("read-only workspace user sees lists without create or edit actions", async ({
+  page,
+}) => {
+  await signIn(page, "workspaceviewer@example.test");
+  await page.getByRole("link", { name: "Employees", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Amina Khan" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Add employee" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Edit" })).toHaveCount(0);
+  await page.getByRole("link", { name: "Clients", exact: true }).click();
+  await expect(
+    page.getByRole("link", { name: "Acme Advisory Limited" }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Add client" })).toHaveCount(0);
 });

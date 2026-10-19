@@ -583,6 +583,105 @@ a:focus-visible {
   justify-content: space-between;
   margin-top: 1rem;
 }
+
+.workspace-sections {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.detail-heading,
+.section-heading {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.table-secondary {
+  color: var(--muted);
+  display: block;
+  margin-top: 0.2rem;
+}
+
+.card-list {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin: 0 0 1rem;
+}
+
+.card-list article,
+.timeline-list li,
+.document-list li {
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  padding: 0.8rem;
+}
+
+.card-list p,
+.help-text {
+  color: var(--muted);
+  margin: 0.35rem 0 0;
+}
+
+.timeline-list,
+.document-list {
+  display: grid;
+  gap: 0.6rem;
+  list-style: none;
+  padding: 0;
+}
+
+.timeline-list span,
+.document-list span {
+  color: var(--muted);
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.compact-form {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-top: 1rem;
+}
+
+.compact-form label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.detail-card details {
+  border-top: 1px solid var(--line);
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+}
+
+.detail-card summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.button-danger {
+  background: #9f2d2d;
+  border-color: #9f2d2d;
+  color: #fff;
+}
+
+@media (max-width: 720px) {
+  .detail-heading,
+  .section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .compact-form {
+    grid-template-columns: 1fr;
+  }
+}
 .breadcrumb {
   color: var(--muted);
   font-size: 0.85rem;

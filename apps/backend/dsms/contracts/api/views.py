@@ -3,11 +3,13 @@ import copy
 from typing import cast
 
 from django.http import Http404
+from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -36,6 +38,7 @@ class NoDeleteViewSet(
 ):
     required_module_ids = ("client_contracts",)
     permission_classes = [IsAuthenticated, HasRBACPermission]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     http_method_names = ["get", "post", "patch", "head", "options"]
     model: type
 
@@ -122,6 +125,17 @@ class ClientViewSet(NoDeleteViewSet):
     model = models.Client
     queryset = selectors.client_list()
     serializer_class = SERIALIZERS["Client"]
+    filterset_fields = ["company", "industry", "status"]
+    search_fields = [
+        "client_code",
+        "legal_name",
+        "trade_name",
+        "registration_number",
+        "tax_number",
+        "main_email",
+    ]
+    ordering_fields = ["client_code", "legal_name", "status", "created_at", "updated_at"]
+    ordering = ["legal_name"]
     custom_action_permissions = {"activate": "contracts.change_client"}
 
     @action(detail=True, methods=["post"])
@@ -135,6 +149,10 @@ class ContractViewSet(NoDeleteViewSet):
     model = models.ServiceContract
     queryset = selectors.contract_list()
     serializer_class = SERIALIZERS["ServiceContract"]
+    filterset_fields = ["company", "client", "contract_type", "status"]
+    search_fields = ["contract_number", "title", "client__legal_name", "client_reference"]
+    ordering_fields = ["contract_number", "title", "start_date", "end_date", "status"]
+    ordering = ["-start_date", "contract_number"]
     custom_action_permissions = {
         "submit": "contracts.change_servicecontract",
         "approve": "contracts.approve_contract",
@@ -222,6 +240,29 @@ PostTypeViewSet = basic_viewset(models.PostType)
 PostQualificationViewSet = basic_viewset(models.PostQualificationRequirement)
 PostCredentialViewSet = basic_viewset(models.PostCredentialRequirement)
 SLAViewSet = basic_viewset(models.ServiceLevelAgreement)
+
+# Bounded parent filters support client-ready nested panels without fetching a
+# tenant-wide collection and filtering it in the browser.
+ClientIndustryViewSet.filterset_fields = ["company", "is_active"]
+ClientIndustryViewSet.ordering_fields = ["code", "name"]
+ClientIndustryViewSet.ordering = ["name"]
+ClientContactViewSet.filterset_fields = ["client", "contact_type", "is_active"]
+ClientContactViewSet.ordering_fields = ["name", "created_at"]
+ClientContactViewSet.ordering = ["name"]
+ContractServiceViewSet.filterset_fields = ["contract", "service_type", "is_active"]
+ContractServiceViewSet.ordering_fields = ["name", "start_date", "created_at"]
+ContractServiceViewSet.ordering = ["name"]
+ContractAmendmentViewSet.filterset_fields = ["contract"]
+ContractAmendmentViewSet.ordering_fields = ["amendment_number", "effective_date"]
+ContractAmendmentViewSet.ordering = ["-effective_date", "-amendment_number"]
+CommercialTermsViewSet.filterset_fields = ["contract"]
+SLAViewSet.filterset_fields = {
+    "contract": ["exact"],
+    "site": ["exact", "isnull"],
+    "is_active": ["exact"],
+}
+SLAViewSet.ordering_fields = ["name", "effective_from"]
+SLAViewSet.ordering = ["name"]
 
 
 @module_api_surface("client_contracts")

@@ -32,9 +32,44 @@ export const navigationGroups: NavigationGroup[] = [
     items: [{ label: "Dashboard", href: "/dashboard", order: 10 }],
   },
   {
+    id: "people",
+    label: "People",
+    order: 20,
+    items: [
+      {
+        label: "Employees",
+        href: "/employees",
+        permissions: ["workforce.view_employee"],
+        moduleId: "people",
+        order: 10,
+      },
+    ],
+  },
+  {
+    id: "clients",
+    label: "Clients",
+    order: 30,
+    items: [
+      {
+        label: "Clients",
+        href: "/clients",
+        permissions: ["contracts.view_client"],
+        moduleId: "client_contracts",
+        order: 10,
+      },
+      {
+        label: "Contracts",
+        href: "/contracts",
+        permissions: ["contracts.view_servicecontract"],
+        moduleId: "client_contracts",
+        order: 20,
+      },
+    ],
+  },
+  {
     id: "finance",
     label: "Finance",
-    order: 20,
+    order: 40,
     items: [
       {
         label: "Invoices",
