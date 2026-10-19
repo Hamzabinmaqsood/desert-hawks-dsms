@@ -10,6 +10,6 @@ class CommonConfig(AppConfig):
         # Keep its identity neutral and independent from tenant session state.
         from django.contrib import admin
 
-        admin.site.site_header = "DSMS Administration"
-        admin.site.site_title = "DSMS Admin"
-        admin.site.index_title = "Security Management Platform"
+        admin.site.site_header = "Business Operations Platform Administration"
+        admin.site.site_title = "Business Operations Platform Admin"
+        admin.site.index_title = "Business Operations Platform"

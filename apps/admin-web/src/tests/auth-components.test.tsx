@@ -81,12 +81,17 @@ describe("authentication components", () => {
   it("renders neutral platform identity on the login page", () => {
     render(<LoginPage />);
     expect(
-      screen.getByRole("img", { name: "DSMS platform mark" }),
+      screen.getByRole("img", {
+        name: "Business Operations Platform mark",
+      }),
     ).toBeTruthy();
-    expect(screen.getByText("Security Management Platform")).toBeTruthy();
+    expect(screen.getByText("Business Operations Platform")).toBeTruthy();
+    expect(
+      screen.getByText("Modular business operations for growing Companies."),
+    ).toBeTruthy();
     expect(document.body.textContent).not.toContain("Desert Hawks");
-    expect(loginMetadata.title).toBe("Sign in | DSMS");
-    expect(rootMetadata.title).toBe("DSMS — Security Management Platform");
+    expect(loginMetadata.title).toBe("Sign in | Business Operations Platform");
+    expect(rootMetadata.title).toBe("Business Operations Platform");
   });
 
   it("renders an accessible login form and disables it while submitting", async () => {
@@ -164,7 +169,19 @@ describe("authentication components", () => {
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeTruthy();
     expect(screen.getByText("Protected content")).toBeTruthy();
     expect(
-      screen.getByRole("img", { name: "DSMS platform mark" }),
+      screen.getByRole("img", {
+        name: "Business Operations Platform mark",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: "Skip to main content" })
+        .getAttribute("href"),
+    ).toBe("#main-content");
+    expect(screen.getByRole("main").id).toBe("main-content");
+    expect(screen.getByRole("heading", { name: "Home" })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Administration" }),
     ).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Invoices" })).toBeNull();
     expect(

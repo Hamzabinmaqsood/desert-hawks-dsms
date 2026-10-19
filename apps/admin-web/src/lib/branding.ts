@@ -1,8 +1,9 @@
 import type { CompanyBranding, SelectedCompany } from "@/lib/auth/types";
+import { PRODUCT_DESCRIPTION, PRODUCT_NAME } from "@/lib/product";
 
 export const DEFAULT_BRANDING: CompanyBranding = {
-  display_name: "DSMS",
-  tagline: "Digital Transformation System",
+  display_name: PRODUCT_NAME,
+  tagline: PRODUCT_DESCRIPTION,
   primary_color: "#174D34",
   accent_color: "#D6A84F",
   can_manage: false,

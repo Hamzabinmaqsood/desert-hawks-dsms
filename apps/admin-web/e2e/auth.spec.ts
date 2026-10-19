@@ -21,9 +21,14 @@ test("employee signs in, uses the protected shell, and signs out", async ({
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/login$/);
   await expect(
-    page.getByRole("img", { name: "DSMS platform mark" }),
+    page.getByRole("img", { name: "Business Operations Platform mark" }),
   ).toBeVisible();
-  await expect(page.locator(".brand-login")).not.toContainText("Desert Hawks");
+  await expect(page.locator(".brand-login")).toContainText(
+    "Business Operations Platform",
+  );
+  await expect(page.locator("body")).not.toContainText(
+    "Security Management Platform",
+  );
 
   await page.getByLabel("Work email").fill("employee@example.test");
   await page.getByLabel("Password").fill(randomUUID());
@@ -31,10 +36,15 @@ test("employee signs in, uses the protected shell, and signs out", async ({
 
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(
-    page.getByRole("img", { name: "DSMS platform mark" }),
+    page.getByRole("img", { name: "Business Operations Platform mark" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Alpha Shield workspace" }),
+    page.getByRole("heading", { name: "Alpha Works workspace" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Finance" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Administration" }),
   ).toBeVisible();
   await expect(page.getByText("employee@example.test").first()).toBeVisible();
 
@@ -54,28 +64,36 @@ test("multi-company employee explicitly selects and switches active Company", as
   const switcher = page.getByLabel("Active Company");
   await expect(switcher).toHaveValue("");
 
-  await switcher.selectOption({ label: "DHA — Desert Hawks Alpha" });
+  await switcher.selectOption({ label: "NTA — Northstar Alpha" });
   await expect(switcher).toHaveValue(COMPANY_A_ID);
   await expect(
-    page.getByRole("heading", { name: "Alpha Shield workspace" }),
+    page.getByRole("heading", { name: "Alpha Works workspace" }),
   ).toBeVisible();
   await expect(page.locator(".sidebar .brand")).toContainText(
     "Alpha operations",
   );
   await expect(page.locator(".sidebar .brand")).not.toContainText(
-    "Desert Hawks",
+    "Northstar Alpha",
   );
-  await expect(page).toHaveTitle("Alpha Shield — DSMS");
+  await expect(page).toHaveTitle("Alpha Works — Business Operations Platform");
 
-  await expect(page.getByRole("link", { name: "Invoices" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Vendors" })).toBeVisible();
-  await page.getByRole("link", { name: "Invoices" }).click();
+  await expect(
+    page.getByRole("link", { name: "Invoices", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Vendors", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Invoices", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Invoices" })).toBeVisible();
 
-  await switcher.selectOption({ label: "DHB — Desert Hawks Bravo" });
+  await switcher.selectOption({ label: "NTB — Northstar Bravo" });
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByRole("link", { name: "Invoices" })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Vendors" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Invoices", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Vendors", exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("INV-E2E-001")).toHaveCount(0);
   await page.goto("/invoices");
   await expect(
@@ -85,35 +103,41 @@ test("multi-company employee explicitly selects and switches active Company", as
     page.getByText("This module is not enabled for this Company."),
   ).toBeVisible();
 
-  await switcher.selectOption({ label: "DHA — Desert Hawks Alpha" });
+  await switcher.selectOption({ label: "NTA — Northstar Alpha" });
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByRole("link", { name: "Invoices" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Invoices", exact: true }),
+  ).toBeVisible();
 
-  await page.getByRole("link", { name: "Business settings" }).click();
+  await page
+    .getByRole("link", { name: "Company settings", exact: true })
+    .click();
   await expect(page).toHaveURL(/\/settings\/company$/);
   await expect(page.getByLabel("Default currency")).toHaveValue("USD");
   await expect(page.getByLabel("Invoice prefix")).toHaveValue("AINV");
 
-  await switcher.selectOption({ label: "DHB — Desert Hawks Bravo" });
+  await switcher.selectOption({ label: "NTB — Northstar Bravo" });
   await expect(switcher).toHaveValue(COMPANY_B_ID);
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(
     page.getByText("multicompany@example.test").first(),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Bravo Guard workspace" }),
+    page.getByRole("heading", { name: "Bravo Works workspace" }),
   ).toBeVisible();
   await expect(page.locator(".sidebar .brand")).toContainText(
     "Bravo operations",
   );
   await expect(page.locator(".sidebar .brand")).not.toContainText(
-    "Alpha Shield",
+    "Alpha Works",
   );
   await expect(page.locator(".sidebar .brand")).not.toContainText(
-    "Desert Hawks",
+    "Northstar Alpha",
   );
-  await expect(page).toHaveTitle("Bravo Guard — DSMS");
-  await page.getByRole("link", { name: "Business settings" }).click();
+  await expect(page).toHaveTitle("Bravo Works — Business Operations Platform");
+  await page
+    .getByRole("link", { name: "Company settings", exact: true })
+    .click();
   await expect(page.getByLabel("Default currency")).toHaveValue("AED");
   await expect(page.getByLabel("Invoice prefix")).toHaveValue("BINV");
   await expect(page.getByLabel("Timezone")).toHaveValue("Asia/Dubai");
@@ -124,11 +148,16 @@ test("platform operator changes a module and tenant UX follows authoritative con
 }) => {
   await signIn(page, "platformoperator@example.test");
   await page.goto("/platform/companies");
+  await expect(page).toHaveTitle(
+    "Platform administration — Business Operations Platform",
+  );
+  await expect(page.getByRole("heading", { name: "Platform" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Home" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Companies" })).toBeVisible();
   await page.getByRole("link", { name: "Open" }).click();
   await page.getByRole("link", { name: "Manage business modules" }).click();
   await expect(
-    page.getByRole("heading", { name: "Desert Hawks Alpha" }),
+    page.getByRole("heading", { name: "Northstar Alpha" }),
   ).toBeVisible();
   await page
     .getByLabel("Billing & Receivables source")
@@ -139,7 +168,9 @@ test("platform operator changes a module and tenant UX follows authoritative con
   await page.getByRole("button", { name: "Sign out" }).click();
 
   await signIn(page, "employee@example.test");
-  await expect(page.getByRole("link", { name: "Invoices" })).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Invoices", exact: true }),
+  ).toHaveCount(0);
   await page.goto("/invoices");
   await expect(
     page.getByRole("heading", { name: "Module unavailable" }),
@@ -163,7 +194,38 @@ test("platform operator changes a module and tenant UX follows authoritative con
   await page.getByRole("button", { name: "Sign out" }).click();
 
   await signIn(page, "employee@example.test");
-  await expect(page.getByRole("link", { name: "Invoices" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Invoices", exact: true }),
+  ).toBeVisible();
+});
+
+test("mobile shell exposes grouped navigation without viewport overflow", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page, "employee@example.test");
+  const menu = page.getByRole("button", { name: "Menu" });
+  await expect(menu).toHaveAttribute("aria-expanded", "false");
+  await menu.click();
+  await expect(
+    page.getByRole("button", { name: "Close menu" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByLabel("Active Company")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Finance" })).toBeVisible();
+  await page
+    .getByLabel("Primary navigation")
+    .getByRole("link", { name: "Invoices", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/invoices$/);
+  await expect(page.getByRole("button", { name: "Menu" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
 });
 
 test("employee reads an Invoice list and detail", async ({ page }) => {
@@ -171,7 +233,7 @@ test("employee reads an Invoice list and detail", async ({ page }) => {
   await page.getByLabel("Work email").fill("employee@example.test");
   await page.getByLabel("Password").fill(randomUUID());
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("link", { name: "Invoices" }).click();
+  await page.getByRole("link", { name: "Invoices", exact: true }).click();
   await expect(page).toHaveURL(/\/invoices$/);
   await expect(page.getByRole("heading", { name: "Invoices" })).toBeVisible();
   await page.getByRole("link", { name: "INV-E2E-001" }).click();
@@ -179,22 +241,30 @@ test("employee reads an Invoice list and detail", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "INV-E2E-001" }),
   ).toBeVisible();
-  await expect(page.getByText("Monthly guarding service")).toBeVisible();
+  await expect(page.getByText("Monthly support service")).toBeVisible();
   await expect(page.getByText(/PKR.*11,600.00/).first()).toBeVisible();
   await expect(page.getByText("Issued").first()).toBeVisible();
-  await page.getByRole("link", { name: "Invoices" }).first().click();
+  await page
+    .getByLabel("Primary navigation")
+    .getByRole("link", { name: "Invoices", exact: true })
+    .click();
   await expect(page).toHaveURL(/\/invoices$/);
 });
 
 test("a maker creates a draft invoice, adds and edits a line, and sees server totals", async ({
   page,
 }) => {
+  const siteRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/reference/sites"))
+      siteRequests.push(request.url());
+  });
   await page.goto("/login");
   await page.getByLabel("Work email").fill("maker@example.test");
   await page.getByLabel("Password").fill(randomUUID());
   await page.getByRole("button", { name: "Sign in" }).click();
 
-  await page.getByRole("link", { name: "Invoices" }).click();
+  await page.getByRole("link", { name: "Invoices", exact: true }).click();
   await page.getByRole("link", { name: "New Invoice" }).click();
   await expect(page).toHaveURL(/\/invoices\/new$/);
 
@@ -211,8 +281,10 @@ test("a maker creates a draft invoice, adds and edits a line, and sees server to
   await expect(
     page.getByRole("heading", { name: "Edit INV-E2E-DRAFT-001" }),
   ).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Site" })).toHaveCount(0);
+  expect(siteRequests).toEqual([]);
 
-  await page.getByLabel("Description").fill("Guard patrol");
+  await page.getByLabel("Description").fill("Consulting service");
   await page.getByLabel("Quantity").fill("4.0000");
   await page.getByLabel("Unit price").fill("2500.00");
   await page
@@ -220,7 +292,7 @@ test("a maker creates a draft invoice, adds and edits a line, and sees server to
     .selectOption({ label: "4000 — Service Revenue" });
   await page.getByRole("button", { name: "Add line" }).click();
 
-  await expect(page.getByText("Guard patrol")).toBeVisible();
+  await expect(page.getByText("Consulting service")).toBeVisible();
   await expect(page.getByText(/PKR.*10,000.00/).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Edit" }).click();
@@ -235,7 +307,7 @@ test("a maker creates a draft invoice, adds and edits a line, and sees server to
   await expect(
     page.getByRole("heading", { name: "INV-E2E-DRAFT-001" }),
   ).toBeVisible();
-  await expect(page.getByText("Guard patrol")).toBeVisible();
+  await expect(page.getByText("Consulting service")).toBeVisible();
 });
 
 test("least-privilege actors complete the Invoice and Receipt lifecycle", async ({
@@ -256,14 +328,14 @@ test("least-privilege actors complete the Invoice and Receipt lifecycle", async 
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page).toHaveURL(/\/invoices\/90000000-.*\/edit$/);
 
-  await page.getByLabel("Description").fill("Guard patrol");
+  await page.getByLabel("Description").fill("Consulting service");
   await page.getByLabel("Quantity").fill("4.0000");
   await page.getByLabel("Unit price").fill("2500.00");
   await page
     .getByRole("combobox", { name: "Revenue account" })
     .selectOption({ label: "4000 — Service Revenue" });
   await page.getByRole("button", { name: "Add line" }).click();
-  await expect(page.getByText("Guard patrol")).toBeVisible();
+  await expect(page.getByText("Consulting service")).toBeVisible();
 
   await page
     .getByRole("link", { name: "Back to invoice", exact: true })
@@ -376,7 +448,7 @@ test("least-privilege Vendor manager creates, edits, and searches Vendor master 
   expect(session.permissions).not.toContain("finance.manage_procurement");
   expect(session.permissions).not.toContain("finance.manage_chart_of_accounts");
 
-  await page.getByRole("link", { name: "Vendors" }).click();
+  await page.getByRole("link", { name: "Vendors", exact: true }).click();
   await expect(page).toHaveURL(/\/vendors$/);
   await page.getByRole("link", { name: "New Vendor" }).click();
   await page.getByLabel("Code").fill("V-E2E-001");
@@ -399,7 +471,7 @@ test("least-privilege Vendor manager creates, edits, and searches Vendor master 
     page.getByRole("heading", { name: "E2E Updated Supplier" }),
   ).toBeVisible();
 
-  await page.getByRole("link", { name: "Vendors" }).first().click();
+  await page.getByRole("link", { name: "Vendors", exact: true }).click();
   await page.getByLabel("Search").fill("Updated Supplier");
   await page.getByRole("button", { name: "Apply" }).click();
   await expect(page.getByRole("link", { name: "V-E2E-001" })).toBeVisible();

@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 
 import { LoginForm } from "@/components/auth/login-form";
 import { BrandLogo } from "@/components/brand/brand-logo";
+import { PRODUCT_DESCRIPTION, PRODUCT_NAME } from "@/lib/product";
 
-export const metadata: Metadata = { title: "Sign in | DSMS" };
+export const metadata: Metadata = { title: `Sign in | ${PRODUCT_NAME}` };
 
 export default function LoginPage() {
   return (
@@ -12,9 +13,9 @@ export default function LoginPage() {
         <div className="brand brand-login">
           <BrandLogo className="brand-logo-login" priority />
           <span>
-            DSMS
+            {PRODUCT_NAME}
             <br />
-            <small>Security Management Platform</small>
+            <small>{PRODUCT_DESCRIPTION}</small>
           </span>
         </div>
         <h1 id="login-title">Welcome back</h1>

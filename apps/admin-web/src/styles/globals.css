@@ -139,6 +139,10 @@ a:focus-visible {
   gap: 0.75rem;
   line-height: 1.1;
 }
+.brand > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .brand small {
   color: #b8c9bf;
   font-size: 0.7rem;
@@ -184,14 +188,48 @@ a:focus-visible {
   grid-template-columns: 15rem 1fr;
   min-height: 100vh;
 }
+.skip-link {
+  background: white;
+  border: 2px solid var(--brand-dark);
+  border-radius: 0.4rem;
+  color: var(--brand-dark);
+  font-weight: 800;
+  left: 1rem;
+  padding: 0.7rem 1rem;
+  position: fixed;
+  top: 1rem;
+  transform: translateY(-200%);
+  z-index: 100;
+}
+.skip-link:focus {
+  transform: translateY(0);
+}
 .sidebar {
   background: var(--brand-dark);
   border-top: 0.35rem solid var(--tenant-accent);
   color: white;
   padding: 1.5rem 1rem;
 }
+.sidebar-heading {
+  min-width: 0;
+}
 .sidebar .brand {
   padding: 0 0.5rem 2rem;
+}
+.mobile-menu-button {
+  display: none;
+}
+.sidebar-navigation {
+  display: grid;
+  gap: 1.35rem;
+}
+.navigation-group h2 {
+  color: #b8c9bf;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  margin: 0 0 0.4rem;
+  padding: 0 0.75rem;
+  text-transform: uppercase;
 }
 .sidebar ul {
   display: grid;
@@ -269,26 +307,79 @@ a:focus-visible {
   margin-top: 0;
 }
 .content {
+  min-width: 0;
   padding: 2rem;
+}
+.content:focus {
+  outline: none;
 }
 .page-header {
   align-items: flex-start;
   display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
   justify-content: space-between;
   margin-bottom: 1.5rem;
+}
+.page-header > div:first-child {
+  flex: 1 1 22rem;
+  min-width: 0;
 }
 .page-header h1 {
   font-size: 1.8rem;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 .page-header p {
   color: var(--muted);
   margin: 0.45rem 0 0;
 }
+.page-header-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
 .dashboard-grid {
   display: grid;
   gap: 1rem;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.dashboard-widget {
+  background: white;
+  border: 1px solid var(--line);
+  border-top: 0.2rem solid var(--tenant-accent);
+  border-radius: 0.75rem;
+  min-width: 0;
+  padding: 1.25rem;
+}
+.dashboard-widget h2,
+.state-card h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.75rem;
+}
+.dashboard-widget p,
+.state-card p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+}
+.setup-list,
+.quick-actions {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.quick-actions {
+  list-style: none;
+  padding-left: 0;
+}
+.setup-list a,
+.quick-actions a {
+  color: var(--brand-dark);
+  font-weight: 700;
 }
 .summary-card,
 .state-card {
@@ -313,6 +404,17 @@ a:focus-visible {
 .state-error {
   border-color: #e3baba;
   color: var(--danger);
+}
+.state-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.45rem;
+}
+.state-guidance {
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 .branding-readonly {
   background: #f6f8f7;
@@ -538,11 +640,38 @@ a:focus-visible {
   .sidebar {
     padding: 0.85rem 1rem;
   }
-  .sidebar .brand {
-    padding-bottom: 0.8rem;
-  }
-  .sidebar nav ul {
+  .sidebar-heading {
+    align-items: center;
     display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+  }
+  .sidebar .brand {
+    padding: 0;
+  }
+  .brand-logo-shell {
+    height: 2.75rem;
+    width: 2.75rem;
+  }
+  .mobile-menu-button {
+    background: transparent;
+    border: 1px solid rgb(255 255 255 / 55%);
+    border-radius: 0.45rem;
+    color: white;
+    cursor: pointer;
+    display: block;
+    font-weight: 800;
+    min-height: 2.75rem;
+    padding: 0.55rem 0.8rem;
+  }
+  .sidebar-navigation {
+    display: none;
+    margin-top: 1rem;
+    max-height: min(65vh, 32rem);
+    overflow-y: auto;
+  }
+  .sidebar-navigation.is-open {
+    display: grid;
   }
   .topbar,
   .content {
@@ -564,6 +693,10 @@ a:focus-visible {
   }
   .dashboard-grid {
     grid-template-columns: 1fr;
+  }
+  .page-header-actions,
+  .page-header-actions > * {
+    width: 100%;
   }
   .invoice-filters,
   .detail-columns,

@@ -138,9 +138,19 @@ const baseSession: SessionData = {
 function renderWithSession(
   node: React.ReactNode,
   permissions = baseSession.permissions,
+  effectiveModules = baseSession.company_context.effective_modules,
 ) {
   return render(
-    <AuthProvider session={{ ...baseSession, permissions }}>
+    <AuthProvider
+      session={{
+        ...baseSession,
+        permissions,
+        company_context: {
+          ...baseSession.company_context,
+          effective_modules: effectiveModules,
+        },
+      }}
+    >
       {node}
     </AuthProvider>,
   );
@@ -375,7 +385,7 @@ describe("Invoice line editor", () => {
 
   function editRoutes(
     currentInvoice: { value: InvoiceDetail },
-    overrides: Array<[RegExp, () => Response]> = [],
+    overrides: Array<[RegExp, (init?: RequestInit) => Response]> = [],
   ) {
     return routedFetch([
       // Overrides must win over the defaults below for the same pattern,
@@ -438,6 +448,58 @@ describe("Invoice line editor", () => {
 
     await vi.waitFor(() => expect(addCalls).toBe(1));
     expect(await screen.findAllByText(/PKR.*23,200.00/)).toBeTruthy();
+  });
+
+  it("hides and never requests Security Site options for a non-security Company", async () => {
+    const fetchMock = editRoutes({ value: draftInvoice });
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithSession(<InvoiceEditPage id="invoice-1" />);
+    await screen.findByRole("heading", { name: "Edit INV-DRAFT-001" });
+    expect(screen.queryByRole("combobox", { name: "Site" })).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("/sites")),
+    ).toBe(false);
+  });
+
+  it("retains the Site selector for a security-enabled Company", async () => {
+    const fetchMock = editRoutes({ value: draftInvoice });
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithSession(
+      <InvoiceEditPage id="invoice-1" />,
+      baseSession.permissions,
+      ["billing_receivables", "security_operations"],
+    );
+    expect(await screen.findByRole("combobox", { name: "Site" })).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("/sites")),
+    ).toBe(true);
+  });
+
+  it("omits a historical Site from unrelated edits when the security module is disabled", async () => {
+    let patchBody: Record<string, unknown> | undefined;
+    const historicalInvoice: InvoiceDetail = {
+      ...draftInvoice,
+      lines: [{ ...draftInvoice.lines[0], site: "historical-site" }],
+    };
+    const fetchMock = editRoutes({ value: historicalInvoice }, [
+      [
+        /PATCH .*\/api\/invoices\/invoice-1\/lines\/line-1$/,
+        (init) => {
+          patchBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return json({ id: "line-1" });
+        },
+      ],
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithSession(<InvoiceEditPage id="invoice-1" />);
+    await screen.findByRole("heading", { name: "Edit INV-DRAFT-001" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Description"), {
+      target: { value: "Updated service" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save line" }));
+    await vi.waitFor(() => expect(patchBody).toBeDefined());
+    expect(patchBody).not.toHaveProperty("site");
   });
 
   it("requires confirmation before deleting a line", async () => {

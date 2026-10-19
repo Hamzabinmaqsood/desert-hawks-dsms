@@ -25,9 +25,9 @@ const MAKER_ID = "00000000-0000-0000-0000-000000000001";
 const APPROVER_ID = "00000000-0000-0000-0000-000000000002";
 const COMPANY_A = {
   id: "00000000-0000-0000-0000-000000000002",
-  code: "DHA",
-  display_name: "Desert Hawks Alpha",
-  legal_name: "Desert Hawks Alpha Limited",
+  code: "NTA",
+  display_name: "Northstar Alpha",
+  legal_name: "Northstar Alpha Limited",
   is_active: true,
   effective_modules: [
     "people",
@@ -38,7 +38,7 @@ const COMPANY_A = {
   ],
   entitlement_revision: 4,
   branding: {
-    display_name: "Alpha Shield",
+    display_name: "Alpha Works",
     tagline: "Alpha operations",
     primary_color: "#174D34",
     accent_color: "#D6A84F",
@@ -56,14 +56,14 @@ const COMPANY_A = {
 };
 const COMPANY_B = {
   id: "00000000-0000-0000-0000-000000000003",
-  code: "DHB",
-  display_name: "Desert Hawks Bravo",
-  legal_name: "Desert Hawks Bravo Limited",
+  code: "NTB",
+  display_name: "Northstar Bravo",
+  legal_name: "Northstar Bravo Limited",
   is_active: true,
   effective_modules: ["finance_core", "procurement_payables"],
   entitlement_revision: 9,
   branding: {
-    display_name: "Bravo Guard",
+    display_name: "Bravo Works",
     tagline: "Bravo operations",
     primary_color: "#243B6B",
     accent_color: "#4DB6AC",
@@ -450,7 +450,7 @@ const invoice = {
   voided_by: null,
   voided_at: null,
   void_reason: "",
-  billing_name_snapshot: "E2E Security Client",
+  billing_name_snapshot: "E2E Services Client",
   billing_address_snapshot: "Test address",
   tax_registration_snapshot: "",
   payment_terms_snapshot: 30,
@@ -468,7 +468,7 @@ const invoice = {
       contract_service: null,
       site: null,
       billing_rule: null,
-      description: "Monthly guarding service",
+      description: "Monthly support service",
       quantity: "10.0000",
       unit: "SHIFT",
       unit_price: "1000.00",

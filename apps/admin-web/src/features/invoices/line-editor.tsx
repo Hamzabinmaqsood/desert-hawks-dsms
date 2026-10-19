@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { FormError, FormField } from "@/components/ui/form-field";
+import { useAuth } from "@/features/auth/auth-context";
 import { ApiError } from "@/lib/api/client";
 
 import {
@@ -62,7 +63,7 @@ function validateLine(form: LineForm) {
   return errors;
 }
 
-function toPayload(form: LineForm) {
+function toPayload(form: LineForm, includeSite: boolean) {
   return {
     description: form.description.trim(),
     quantity: form.quantity,
@@ -72,8 +73,8 @@ function toPayload(form: LineForm) {
     tax_rate: form.tax_rate || "0.00",
     revenue_account: form.revenue_account,
     contract_service: form.contract_service || null,
-    site: form.site || null,
     billing_rule: form.billing_rule || null,
+    ...(includeSite ? { site: form.site || null } : {}),
   };
 }
 
@@ -86,6 +87,8 @@ export function InvoiceLineEditor({
   onChanged: (invoice: InvoiceDetail) => void;
   onConflict: () => Promise<void>;
 }) {
+  const auth = useAuth();
+  const securityOperationsEnabled = auth.hasModule("security_operations");
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [accountsError, setAccountsError] = useState("");
   const [allContractServices, setAllContractServices] = useState<
@@ -125,15 +128,17 @@ export function InvoiceLineEditor({
         if (active) setAllContractServices(list);
       })
       .catch(() => undefined);
-    listSites()
-      .then((list) => {
-        if (active) setAllSites(list);
-      })
-      .catch(() => undefined);
+    if (securityOperationsEnabled) {
+      listSites()
+        .then((list) => {
+          if (active) setAllSites(list);
+        })
+        .catch(() => undefined);
+    }
     return () => {
       active = false;
     };
-  }, []);
+  }, [securityOperationsEnabled]);
 
   const contractServices = invoice.contract
     ? allContractServices.filter(
@@ -191,9 +196,16 @@ export function InvoiceLineEditor({
     setNonFieldError(undefined);
     try {
       if (editingLineId) {
-        await updateInvoiceLine(invoice.id, editingLineId, toPayload(form));
+        await updateInvoiceLine(
+          invoice.id,
+          editingLineId,
+          toPayload(form, securityOperationsEnabled),
+        );
       } else {
-        await addInvoiceLine(invoice.id, toPayload(form));
+        await addInvoiceLine(
+          invoice.id,
+          toPayload(form, securityOperationsEnabled),
+        );
       }
       await refreshInvoice();
       cancelEdit();
@@ -405,21 +417,23 @@ export function InvoiceLineEditor({
             </span>
           ) : null}
         </label>
-        <label className="form-field">
-          <span>Site</span>
-          <select
-            value={form.site}
-            onChange={(event) => set("site", event.target.value)}
-            disabled={saving || sites.length === 0}
-          >
-            <option value="">None</option>
-            {sites.map((site) => (
-              <option key={site.id} value={site.id}>
-                {site.site_code} — {site.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {securityOperationsEnabled ? (
+          <label className="form-field">
+            <span>Site</span>
+            <select
+              value={form.site}
+              onChange={(event) => set("site", event.target.value)}
+              disabled={saving || sites.length === 0}
+            >
+              <option value="">None</option>
+              {sites.map((site) => (
+                <option key={site.id} value={site.id}>
+                  {site.site_code} — {site.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <label className="form-field">
           <span>Billing rule</span>
           <select

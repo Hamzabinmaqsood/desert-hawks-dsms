@@ -8,6 +8,7 @@ import { LogoutButton } from "@/components/auth/logout-button";
 import { Sidebar } from "@/components/layout/sidebar";
 import { useAuth } from "@/features/auth/auth-context";
 import { resolveCompanyBranding } from "@/lib/branding";
+import { PLATFORM_DOCUMENT_TITLE, tenantDocumentTitle } from "@/lib/product";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const session = useAuth();
@@ -26,13 +27,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   } as CSSProperties;
   useEffect(() => {
     document.title = platformArea
-      ? "Platform administration — DSMS"
-      : selectedCompany
-        ? `${branding.display_name} — DSMS`
-        : "DSMS — Security Management Platform";
+      ? PLATFORM_DOCUMENT_TITLE
+      : tenantDocumentTitle(selectedCompany ? branding.display_name : null);
   }, [branding.display_name, platformArea, selectedCompany]);
   return (
     <div className="app-shell" style={tenantStyle}>
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
       <Sidebar
         permissions={session.permissions}
         effectiveModules={session.company_context.effective_modules}
@@ -41,6 +43,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           session.platform_capabilities.can_access_platform_admin
         }
         branding={branding}
+        platformArea={platformArea}
       />
       <div className="app-workspace">
         <header className="topbar">
@@ -53,7 +56,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <LogoutButton />
           </div>
         </header>
-        <main className="content">
+        <main className="content" id="main-content" tabIndex={-1}>
           {platformArea ? (
             children
           ) : session.company_context.companies.length === 0 ? (

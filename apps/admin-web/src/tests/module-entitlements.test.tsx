@@ -12,6 +12,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import {
   isNavigationItemVisible,
   navigation,
+  visibleNavigationGroups,
 } from "@/components/layout/sidebar";
 import { AuthProvider } from "@/features/auth/auth-context";
 import { ApiError, apiFetch } from "@/lib/api/client";
@@ -97,17 +98,10 @@ describe("tenant module capability UX", () => {
         ["billing.view_clientinvoice"],
         ["billing_receivables"],
         false,
-        false,
       ),
     ).toBe(true);
     expect(
-      isNavigationItemVisible(
-        invoices,
-        [],
-        ["billing_receivables"],
-        false,
-        false,
-      ),
+      isNavigationItemVisible(invoices, [], ["billing_receivables"], false),
     ).toBe(false);
     expect(
       isNavigationItemVisible(
@@ -115,8 +109,20 @@ describe("tenant module capability UX", () => {
         ["billing.view_clientinvoice"],
         ["procurement_payables"],
         false,
-        false,
       ),
+    ).toBe(false);
+    const apOnlyGroups = visibleNavigationGroups(
+      ["finance.view_vendor"],
+      ["procurement_payables"],
+      false,
+    );
+    expect(apOnlyGroups.find((group) => group.id === "finance")?.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ label: "Vendors" })]),
+    );
+    expect(
+      apOnlyGroups
+        .find((group) => group.id === "finance")
+        ?.items.some((item) => item.label === "Invoices"),
     ).toBe(false);
   });
 

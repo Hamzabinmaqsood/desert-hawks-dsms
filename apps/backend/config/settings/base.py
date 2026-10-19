@@ -173,7 +173,7 @@ REST_FRAMEWORK = {
     },
 }
 SPECTACULAR_SETTINGS = {
-    "TITLE": "DSMS API",
+    "TITLE": "Business Operations Platform API",
     "VERSION": "v1",
     "ENUM_NAME_OVERRIDES": {
         "PaymentBeneficiaryStatusEnum": "dsms.finance.payment_models.BeneficiaryStatus.choices",

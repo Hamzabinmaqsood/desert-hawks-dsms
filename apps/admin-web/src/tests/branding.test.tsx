@@ -96,7 +96,11 @@ describe("Company branding", () => {
     expect(
       container.querySelector(".app-shell")?.getAttribute("style"),
     ).toContain("--tenant-brand: #123456");
-    await waitFor(() => expect(document.title).toBe("Alpha Shield — DSMS"));
+    await waitFor(() =>
+      expect(document.title).toBe(
+        "Alpha Shield — Business Operations Platform",
+      ),
+    );
   });
 
   it("uses stable product colors and tagline when legacy context lacks branding", () => {
@@ -110,7 +114,9 @@ describe("Company branding", () => {
       </AuthProvider>,
     );
     expect(screen.getByText("Company A")).toBeTruthy();
-    expect(screen.getByText("Digital Transformation System")).toBeTruthy();
+    expect(
+      screen.getByText("Modular business operations for growing Companies."),
+    ).toBeTruthy();
     expect(
       container.querySelector(".app-shell")?.getAttribute("style"),
     ).toContain("--tenant-brand: #174D34");

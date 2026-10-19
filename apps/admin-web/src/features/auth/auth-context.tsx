@@ -17,7 +17,7 @@ import {
   type ModuleId,
 } from "@/lib/modules";
 
-interface AuthContextValue extends SessionData {
+export interface AuthContextValue extends SessionData {
   can: (permission: string) => boolean;
   canAny: (...permissions: string[]) => boolean;
   canAll: (...permissions: string[]) => boolean;

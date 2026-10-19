@@ -6,7 +6,9 @@ import { AuthProvider } from "@/features/auth/auth-context";
 import {
   CompanyListPage,
   PlanDetailPage,
+  PlanListPage,
   SubscriptionDetailPage,
+  SubscriptionListPage,
 } from "@/features/platform/pages";
 import type {
   ModuleCatalogItem,
@@ -183,6 +185,7 @@ describe("platform module administration", () => {
         "Plan updated; existing subscriptions retain their current snapshot until explicitly updated.",
     });
     api.getSubscriptionEntitlements.mockResolvedValue(subscriptionState);
+    api.listPlans.mockResolvedValue([plan]);
     api.listCompanies.mockResolvedValue([
       {
         ...company,
@@ -245,6 +248,34 @@ describe("platform module administration", () => {
     expect(
       screen.getByRole("link", { name: "Open" }).getAttribute("href"),
     ).toBe("/platform/companies/company-1");
+  });
+
+  it("shows descriptive capability-aware empty states for platform lists", async () => {
+    api.listCompanies.mockResolvedValue([]);
+    api.listPlans.mockResolvedValue([]);
+    api.listSubscriptions.mockResolvedValue([]);
+    const companies = withAuth(<CompanyListPage />);
+    expect(
+      await screen.findByRole("heading", { name: "No Companies yet" }),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByRole("link", { name: "Provision Company" }).length,
+    ).toBeGreaterThan(0);
+    companies.unmount();
+
+    const plans = withAuth(<PlanListPage />);
+    expect(
+      await screen.findByRole("heading", { name: "No Plans yet" }),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByRole("button", { name: "New Plan" }).length,
+    ).toBeGreaterThan(0);
+    plans.unmount();
+
+    withAuth(<SubscriptionListPage />);
+    expect(
+      await screen.findByRole("heading", { name: "No Subscriptions yet" }),
+    ).toBeTruthy();
   });
 
   it("shows Plan snapshot safety and prevents an invalid dependency draft", async () => {

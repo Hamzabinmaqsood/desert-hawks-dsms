@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { ErrorState, LoadingState } from "@/components/ui/states";
+import { EmptyState, ErrorState, LoadingState } from "@/components/ui/states";
 import { useAuth } from "@/features/auth/auth-context";
 import { ApiError } from "@/lib/api/client";
 import type { ModuleId } from "@/lib/modules";
@@ -150,6 +150,21 @@ export function CompanyListPage() {
       {error ? <ErrorState message={error} /> : null}
       {loading ? (
         <LoadingState label="Loading Companies..." />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          title="No Companies yet"
+          description="Companies available to your platform role will appear here."
+          action={
+            hasPlatformCapability(
+              capabilities,
+              PLATFORM_CAPABILITIES.provisionTenant,
+            ) ? (
+              <Link className="button" href="/platform/companies/new">
+                Provision Company
+              </Link>
+            ) : undefined
+          }
+        />
       ) : (
         <div className="table-wrap">
           <table className="data-table">
@@ -410,13 +425,15 @@ export function PlanListPage() {
   );
   const [plans, setPlans] = useState<PlatformPlan[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   useEffect(() => {
     listPlans()
       .then(setPlans)
       .catch((value) =>
         setError(errorMessage(value, "Plans could not be loaded.")),
-      );
+      )
+      .finally(() => setLoading(false));
   }, []);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -467,30 +484,44 @@ export function PlanListPage() {
         </form>
       ) : null}
       {error ? <ErrorState message={error} /> : null}
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Code</th>
-              <th>Plan</th>
-              <th>Status</th>
-              <th>Modules</th>
-            </tr>
-          </thead>
-          <tbody>
-            {plans.map((plan) => (
-              <tr key={plan.id}>
-                <td>{plan.code}</td>
-                <td>{plan.name}</td>
-                <td>{plan.is_active ? "Active" : "Inactive"}</td>
-                <td>
-                  <Link href={`/platform/plans/${plan.id}`}>Configure</Link>
-                </td>
+      {loading ? (
+        <LoadingState label="Loading Plans..." />
+      ) : plans.length === 0 ? (
+        <EmptyState
+          title="No Plans yet"
+          description="Create a Plan when you are ready to define commercial module defaults."
+          action={
+            canManage ? (
+              <Button onClick={() => setShowCreate(true)}>New Plan</Button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Plan</th>
+                <th>Status</th>
+                <th>Modules</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {plans.map((plan) => (
+                <tr key={plan.id}>
+                  <td>{plan.code}</td>
+                  <td>{plan.name}</td>
+                  <td>{plan.is_active ? "Active" : "Inactive"}</td>
+                  <td>
+                    <Link href={`/platform/plans/${plan.id}`}>Configure</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }
@@ -600,12 +631,14 @@ export function SubscriptionListPage() {
     [],
   );
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     listSubscriptions()
       .then(setSubscriptions)
       .catch((value) =>
         setError(errorMessage(value, "Subscriptions could not be loaded.")),
-      );
+      )
+      .finally(() => setLoading(false));
   }, []);
   return (
     <>
@@ -615,37 +648,46 @@ export function SubscriptionListPage() {
         description="Commercial lifecycle and explicit module snapshot administration."
       />
       {error ? <ErrorState message={error} /> : null}
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Company</th>
-              <th>Plan</th>
-              <th>Status</th>
-              <th>Modules</th>
-            </tr>
-          </thead>
-          <tbody>
-            {subscriptions.map((subscription) => (
-              <tr key={subscription.id}>
-                <td>
-                  {subscription.company.trade_name ||
-                    subscription.company.legal_name}
-                </td>
-                <td>{subscription.plan.name}</td>
-                <td>
-                  <StatusBadge value={subscription.status} />
-                </td>
-                <td>
-                  <Link href={`/platform/subscriptions/${subscription.id}`}>
-                    Manage
-                  </Link>
-                </td>
+      {loading ? (
+        <LoadingState label="Loading Subscriptions..." />
+      ) : subscriptions.length === 0 ? (
+        <EmptyState
+          title="No Subscriptions yet"
+          description="Subscriptions will appear after commercial setup is added to a Company."
+        />
+      ) : (
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Plan</th>
+                <th>Status</th>
+                <th>Modules</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {subscriptions.map((subscription) => (
+                <tr key={subscription.id}>
+                  <td>
+                    {subscription.company.trade_name ||
+                      subscription.company.legal_name}
+                  </td>
+                  <td>{subscription.plan.name}</td>
+                  <td>
+                    <StatusBadge value={subscription.status} />
+                  </td>
+                  <td>
+                    <Link href={`/platform/subscriptions/${subscription.id}`}>
+                      Manage
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }

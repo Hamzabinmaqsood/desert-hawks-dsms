@@ -1,3 +1,5 @@
+import { PRODUCT_NAME, PRODUCT_SHORT_NAME } from "@/lib/product";
+
 export function BrandLogo({
   className = "",
 }: {
@@ -6,11 +8,11 @@ export function BrandLogo({
 }) {
   return (
     <span
-      aria-label="DSMS platform mark"
+      aria-label={`${PRODUCT_NAME} mark`}
       className={`brand-logo ${className}`.trim()}
       role="img"
     >
-      DSMS
+      {PRODUCT_SHORT_NAME}
     </span>
   );
 }
