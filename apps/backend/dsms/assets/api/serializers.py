@@ -16,6 +16,8 @@ from ..models import (
     AssetIssueLine,
     AssetItem,
     AssetMovement,
+    AssetReturn,
+    AssetReturnLine,
     AssetStore,
     ProcurementInventoryRegistration,
     StockAccount,
@@ -212,12 +214,28 @@ class AssetStoreSerializer(TenantSafeAssetSerializer):
 
 
 class AssetSerializer(TenantSafeAssetSerializer):
+    item_code = serializers.CharField(source="item.item_code", read_only=True)
+    item_name = serializers.CharField(source="item.name", read_only=True)
+    category_name = serializers.CharField(source="item.category.name", read_only=True)
+    current_warehouse_name = serializers.CharField(
+        source="current_warehouse.name", read_only=True, allow_null=True
+    )
+    current_branch_name = serializers.CharField(
+        source="current_branch.name", read_only=True, allow_null=True
+    )
+    current_employee_name = serializers.CharField(
+        source="current_employee.full_name", read_only=True, allow_null=True
+    )
+
     class Meta:
         model = Asset
         fields = (
             "id",
             "company",
             "item",
+            "item_code",
+            "item_name",
+            "category_name",
             "asset_number",
             "serial_number",
             "manufacturer_serial",
@@ -230,9 +248,12 @@ class AssetSerializer(TenantSafeAssetSerializer):
             "condition",
             "current_custody_type",
             "current_warehouse",
+            "current_warehouse_name",
             "current_branch",
+            "current_branch_name",
             "current_site",
             "current_employee",
+            "current_employee_name",
             "current_vehicle",
             "warranty_expires_on",
             "expected_retirement_on",
@@ -312,6 +333,10 @@ class AssetIssueLineSerializer(serializers.ModelSerializer[AssetIssueLine]):
 
 class AssetIssueSerializer(TenantSafeAssetSerializer):
     lines = AssetIssueLineSerializer(many=True, read_only=True)
+    employee_name = serializers.CharField(
+        source="employee.full_name", read_only=True, allow_null=True
+    )
+    branch_name = serializers.CharField(source="branch.name", read_only=True, allow_null=True)
 
     class Meta:
         model = AssetIssue
@@ -321,8 +346,10 @@ class AssetIssueSerializer(TenantSafeAssetSerializer):
             "company",
             "issue_type",
             "employee",
+            "employee_name",
             "site",
             "branch",
+            "branch_name",
             "vehicle",
             "requested_by",
             "approved_by",
@@ -378,6 +405,76 @@ class AssetIssueSerializer(TenantSafeAssetSerializer):
                     {selected[0]: "Must belong to the selected company."}
                 )
         return attrs
+
+
+class AssetIssueRequestSerializer(serializers.Serializer[dict[str, object]]):
+    asset = serializers.UUIDField()
+    issue_number = serializers.CharField(max_length=50)
+    issue_type = serializers.ChoiceField(
+        choices=(
+            "TEMPORARY",
+            "LONG_TERM",
+            "EMPLOYEE_ASSIGNMENT",
+        )
+    )
+    employee = serializers.UUIDField(required=False, allow_null=True)
+    branch = serializers.UUIDField(required=False, allow_null=True)
+    expected_return_at = serializers.DateTimeField(required=False, allow_null=True)
+    purpose = serializers.CharField()
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs: dict[str, object]) -> dict[str, object]:
+        if sum(attrs.get(field) is not None for field in ("employee", "branch")) != 1:
+            raise serializers.ValidationError("Select exactly one Employee or Branch recipient.")
+        return attrs
+
+
+class AssetReturnRequestSerializer(serializers.Serializer[dict[str, object]]):
+    return_number = serializers.CharField(max_length=50)
+    return_condition = serializers.ChoiceField(choices=("GOOD", "FAIR", "DAMAGED", "UNSERVICEABLE"))
+    returned_at = serializers.DateTimeField()
+    damage_notes = serializers.CharField(required=False, allow_blank=True)
+    requires_maintenance = serializers.BooleanField(default=False)
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class AssetReturnLineSerializer(serializers.ModelSerializer[AssetReturnLine]):
+    asset_number = serializers.CharField(source="serialized_asset.asset_number", read_only=True)
+
+    class Meta:
+        model = AssetReturnLine
+        fields = (
+            "id",
+            "serialized_asset",
+            "asset_number",
+            "quantity",
+            "return_condition",
+            "damage_notes",
+            "requires_maintenance",
+            "received_at",
+        )
+        read_only_fields = fields
+
+
+class AssetReturnSerializer(serializers.ModelSerializer[AssetReturn]):
+    lines = AssetReturnLineSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = AssetReturn
+        fields = (
+            "id",
+            "return_number",
+            "original_issue",
+            "returned_by_employee",
+            "received_by",
+            "returned_at",
+            "status",
+            "notes",
+            "lines",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
 
 
 class AssetMovementSerializer(serializers.ModelSerializer[AssetMovement]):

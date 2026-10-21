@@ -35,6 +35,7 @@ const COMPANY_A = {
     "finance_core",
     "billing_receivables",
     "procurement_payables",
+    "asset_management",
   ],
   entitlement_revision: 4,
   branding: {
@@ -96,6 +97,7 @@ const SNAPSHOT_MODULES = [
   "finance_core",
   "billing_receivables",
   "procurement_payables",
+  "asset_management",
 ];
 let platformOverrides = [];
 let platformEntitlementRevision = 4;
@@ -109,6 +111,7 @@ const PLATFORM_MODULES = [
     ["client_contracts", "finance_core"],
   ],
   ["procurement_payables", "Procurement & Payables", ["finance_core"]],
+  ["asset_management", "Asset Management", ["finance_core"]],
 ].map(([id, display_name, hard_dependencies]) => ({
   id,
   display_name,
@@ -341,6 +344,37 @@ const ACTORS = {
       "finance.post_journal",
     ],
   },
+  operationsadmin: {
+    id: MAKER_ID,
+    email: "operationsadmin@example.test",
+    first_name: "Operations",
+    last_name: "Administrator",
+    companies: [COMPANY_A, COMPANY_B],
+    permissions: [
+      "finance.view_vendor",
+      "finance.view_purchaserequisition",
+      "finance.add_purchaserequisition",
+      "finance.change_purchaserequisition",
+      "finance.view_purchaseorder",
+      "finance.add_purchaseorder",
+      "finance.change_purchaseorder",
+      "finance.view_purchasereceipt",
+      "finance.add_purchasereceipt",
+      "finance.change_purchasereceipt",
+      "finance.approve_finance",
+      "assets.view_asset",
+      "assets.change_asset",
+      "assets.register_asset",
+      "assets.receive_asset_stock",
+      "assets.view_assetmovement",
+      "assets.view_assetissue",
+      "assets.add_assetissue",
+      "assets.change_assetissue",
+      "assets.approve_asset_issue",
+      "assets.issue_asset",
+      "assets.add_assetreturn",
+    ],
+  },
 };
 
 const actorKeyForEmail = (email) => {
@@ -545,6 +579,109 @@ let vendor = {
   payable_account: PAYABLE_ACCOUNT_ID,
   is_active: true,
 };
+
+const REQUISITION_ID = "85000000-0000-0000-0000-000000000001";
+const REQUISITION_LINE_ID = "85100000-0000-0000-0000-000000000001";
+const PURCHASE_ORDER_ID = "86000000-0000-0000-0000-000000000001";
+const PURCHASE_ORDER_LINE_ID = "86100000-0000-0000-0000-000000000001";
+const PURCHASE_RECEIPT_ID = "87000000-0000-0000-0000-000000000001";
+const PURCHASE_RECEIPT_LINE_ID = "87100000-0000-0000-0000-000000000001";
+const ASSET_ID = "88000000-0000-0000-0000-000000000001";
+const ASSET_ISSUE_ID = "89000000-0000-0000-0000-000000000001";
+const ASSET_CATEGORY_ID = "88100000-0000-0000-0000-000000000001";
+const ASSET_ITEM_ID = "88200000-0000-0000-0000-000000000001";
+const ASSET_STORE_ID = "88300000-0000-0000-0000-000000000001";
+let purchaseRequisition = null;
+let purchaseOrder = null;
+let purchaseReceipt = null;
+let workspaceAsset = null;
+let assetIssue = null;
+
+const requisitionBody = () => ({
+  ...purchaseRequisition,
+  company: COMPANY_A.id,
+  branch: null,
+  branch_name: null,
+  department: null,
+  department_name: null,
+  cost_center: null,
+  cost_center_name: null,
+  created_by_name: "Operations Administrator",
+  approved_by_name:
+    purchaseRequisition?.status === "APPROVED"
+      ? "Operations Administrator"
+      : null,
+  estimated_total: "1000.00",
+  created_at: "2026-10-20T09:00:00Z",
+});
+const orderBody = () => ({
+  ...purchaseOrder,
+  company: COMPANY_A.id,
+  requisition_number: purchaseRequisition?.requisition_number ?? "PR-E2E-001",
+  vendor: VENDOR_ID,
+  vendor_code: vendor.code,
+  vendor_name: vendor.name,
+  created_by_name: "Operations Administrator",
+  approved_by_name:
+    purchaseOrder?.status === "APPROVED" ? "Operations Administrator" : null,
+  total_amount: "950.00",
+  created_at: "2026-10-20T10:00:00Z",
+});
+const purchaseReceiptBody = () => ({
+  ...purchaseReceipt,
+  company: COMPANY_A.id,
+  purchase_order_number: purchaseOrder?.order_number ?? "PO-E2E-001",
+  vendor: VENDOR_ID,
+  vendor_name: vendor.name,
+  received_by_name: "Operations Administrator",
+  created_at: "2026-10-20T11:00:00Z",
+});
+const assetBody = () => ({
+  id: ASSET_ID,
+  company: COMPANY_A.id,
+  item: ASSET_ITEM_ID,
+  item_code: "LAPTOP",
+  item_name: "Laptop",
+  category_name: "IT equipment",
+  asset_number: "AST-E2E-001",
+  serial_number: "SER-E2E-001",
+  status: assetIssue?.status === "ISSUED" ? "ISSUED" : "AVAILABLE",
+  condition: workspaceAsset?.condition ?? "NEW",
+  current_custody_type:
+    assetIssue?.status === "ISSUED" ? "BRANCH" : "WAREHOUSE",
+  current_warehouse: ASSET_STORE_ID,
+  current_warehouse_name: "Main Store",
+  current_branch: assetIssue?.status === "ISSUED" ? COMPANY_A.id : null,
+  current_branch_name: assetIssue?.status === "ISSUED" ? "Head office" : null,
+  current_employee: null,
+  current_employee_name: null,
+  current_site: null,
+  acquired_on: "2026-10-20",
+  procurement_receipt_reference:
+    purchaseReceipt?.receipt_number ?? "GRN-E2E-001",
+  purchase_order_reference: purchaseOrder?.order_number ?? "PO-E2E-001",
+  warranty_expires_on: workspaceAsset?.warranty_expires_on ?? null,
+  expected_retirement_on: workspaceAsset?.expected_retirement_on ?? null,
+  notes: workspaceAsset?.notes ?? "",
+  created_at: "2026-10-20T12:00:00Z",
+});
+const issueBody = () => ({
+  ...assetIssue,
+  company: COMPANY_A.id,
+  employee: null,
+  employee_name: null,
+  branch: COMPANY_A.id,
+  branch_name: "Head office",
+  lines: [
+    {
+      id: "89100000-0000-0000-0000-000000000001",
+      serialized_asset: ASSET_ID,
+      requested_quantity: "1.000",
+      issued_quantity: assetIssue?.status === "ISSUED" ? "1.000" : null,
+      returned_quantity: assetIssue?.status === "RETURNED" ? "1.000" : "0.000",
+    },
+  ],
+});
 
 const VENDOR_BILL_ID = "81000000-0000-0000-0000-000000000001";
 const VENDOR_BILL_ACCOUNT_ID = "50000000-0000-0000-0000-000000000300";
@@ -751,6 +888,7 @@ createServer(async (request, response) => {
     return json(response, 401, { detail: "Unauthenticated" });
   }
   const actor = actorForToken(request.headers.authorization);
+  const selectedCompanyId = contextBody(request, actor).selected_company?.id;
   if (path === "/api/v1/auth/company-context/" && request.method === "GET") {
     return json(response, 200, contextBody(request, actor));
   }
@@ -875,6 +1013,287 @@ createServer(async (request, response) => {
     return json(response, 200, [
       { id: PAYABLE_ACCOUNT_ID, code: "2000", name: "Trade Payables" },
     ]);
+  if (
+    path === "/api/v1/finance/purchase-requisitions/" &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    const line = body.lines[0];
+    purchaseRequisition = {
+      id: REQUISITION_ID,
+      requisition_number: body.requisition_number,
+      required_date: body.required_date,
+      purpose: body.purpose,
+      status: "DRAFT",
+      lines: [
+        {
+          id: REQUISITION_LINE_ID,
+          ...line,
+          estimated_total: "1000.00",
+          expense_account_code: "6100",
+          expense_account_name: "Equipment expense",
+        },
+      ],
+    };
+    return json(response, 201, requisitionBody());
+  }
+  if (
+    path === `/api/v1/finance/purchase-requisitions/${REQUISITION_ID}/` &&
+    request.method === "GET"
+  )
+    return purchaseRequisition && selectedCompanyId === COMPANY_A.id
+      ? json(response, 200, requisitionBody())
+      : json(response, 404, { detail: "Not found." });
+  for (const [action, target] of [
+    ["submit", "SUBMITTED"],
+    ["approve", "APPROVED"],
+    ["reject", "REJECTED"],
+  ]) {
+    if (
+      path ===
+        `/api/v1/finance/purchase-requisitions/${REQUISITION_ID}/${action}/` &&
+      request.method === "POST"
+    ) {
+      purchaseRequisition.status = target;
+      return json(response, 200, requisitionBody());
+    }
+  }
+  if (path?.startsWith("/api/v1/finance/purchase-requisitions/?"))
+    return json(response, 200, {
+      count: purchaseRequisition && selectedCompanyId === COMPANY_A.id ? 1 : 0,
+      next: null,
+      previous: null,
+      results:
+        purchaseRequisition && selectedCompanyId === COMPANY_A.id
+          ? [requisitionBody()]
+          : [],
+    });
+  if (
+    path === "/api/v1/finance/purchase-orders/" &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    const line = body.lines[0];
+    purchaseOrder = {
+      id: PURCHASE_ORDER_ID,
+      requisition: REQUISITION_ID,
+      order_number: body.order_number,
+      order_date: body.order_date,
+      status: "DRAFT",
+      lines: [
+        {
+          id: PURCHASE_ORDER_LINE_ID,
+          ...line,
+          requisition_line_description: line.description,
+          line_total: "950.00",
+          received_quantity: "0.0000",
+        },
+      ],
+    };
+    return json(response, 201, orderBody());
+  }
+  if (path === `/api/v1/finance/purchase-orders/${PURCHASE_ORDER_ID}/`)
+    return purchaseOrder && selectedCompanyId === COMPANY_A.id
+      ? json(response, 200, orderBody())
+      : json(response, 404, { detail: "Not found." });
+  for (const [action, target] of [
+    ["submit", "SUBMITTED"],
+    ["approve", "APPROVED"],
+    ["reject", "REJECTED"],
+  ]) {
+    if (
+      path ===
+        `/api/v1/finance/purchase-orders/${PURCHASE_ORDER_ID}/${action}/` &&
+      request.method === "POST"
+    ) {
+      purchaseOrder.status = target;
+      return json(response, 200, orderBody());
+    }
+  }
+  if (path?.startsWith("/api/v1/finance/purchase-orders/?"))
+    return json(response, 200, {
+      count: purchaseOrder && selectedCompanyId === COMPANY_A.id ? 1 : 0,
+      next: null,
+      previous: null,
+      results:
+        purchaseOrder && selectedCompanyId === COMPANY_A.id
+          ? [orderBody()]
+          : [],
+    });
+  if (
+    path === "/api/v1/finance/purchase-receipts/" &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    const line = body.lines[0];
+    purchaseReceipt = {
+      id: PURCHASE_RECEIPT_ID,
+      purchase_order: PURCHASE_ORDER_ID,
+      receipt_number: body.receipt_number,
+      receipt_date: body.receipt_date,
+      receipt_type: body.receipt_type,
+      status: "DRAFT",
+      lines: [
+        {
+          id: PURCHASE_RECEIPT_LINE_ID,
+          ...line,
+          description: purchaseOrder.lines[0].description,
+          ordered_quantity: purchaseOrder.lines[0].quantity,
+        },
+      ],
+    };
+    return json(response, 201, purchaseReceiptBody());
+  }
+  if (path === `/api/v1/finance/purchase-receipts/${PURCHASE_RECEIPT_ID}/`)
+    return purchaseReceipt && selectedCompanyId === COMPANY_A.id
+      ? json(response, 200, purchaseReceiptBody())
+      : json(response, 404, { detail: "Not found." });
+  if (
+    path ===
+      `/api/v1/finance/purchase-receipts/${PURCHASE_RECEIPT_ID}/confirm/` &&
+    request.method === "POST"
+  ) {
+    purchaseReceipt.status = "APPROVED";
+    purchaseOrder.lines[0].received_quantity =
+      purchaseReceipt.lines[0].accepted_quantity;
+    return json(response, 200, purchaseReceiptBody());
+  }
+  if (path?.startsWith("/api/v1/finance/purchase-receipts/?"))
+    return json(response, 200, {
+      count: purchaseReceipt && selectedCompanyId === COMPANY_A.id ? 1 : 0,
+      next: null,
+      previous: null,
+      results:
+        purchaseReceipt && selectedCompanyId === COMPANY_A.id
+          ? [purchaseReceiptBody()]
+          : [],
+    });
+  if (path?.startsWith("/api/v1/assets/categories/?"))
+    return json(response, 200, {
+      count: 1,
+      next: null,
+      previous: null,
+      results: [
+        {
+          id: ASSET_CATEGORY_ID,
+          company: COMPANY_A.id,
+          code: "IT",
+          name: "IT equipment",
+          tracking_method: "SERIALIZED",
+          is_controlled: false,
+          is_active: true,
+        },
+      ],
+    });
+  if (path?.startsWith("/api/v1/assets/items/?"))
+    return json(response, 200, {
+      count: 1,
+      next: null,
+      previous: null,
+      results: [
+        {
+          id: ASSET_ITEM_ID,
+          company: COMPANY_A.id,
+          category: ASSET_CATEGORY_ID,
+          item_code: "LAPTOP",
+          name: "Laptop",
+          manufacturer: "Generic",
+          model: "Business",
+          unit_of_measure: "EACH",
+          is_active: true,
+        },
+      ],
+    });
+  if (path?.startsWith("/api/v1/assets/stores/?"))
+    return json(response, 200, {
+      count: 1,
+      next: null,
+      previous: null,
+      results: [
+        {
+          id: ASSET_STORE_ID,
+          company: COMPANY_A.id,
+          branch: null,
+          code: "MAIN",
+          name: "Main Store",
+          is_active: true,
+        },
+      ],
+    });
+  if (
+    path === "/api/v1/assets/procurement-registrations/" &&
+    request.method === "POST"
+  ) {
+    workspaceAsset = assetBody();
+    return json(response, 201, {
+      id: "88400000-0000-0000-0000-000000000001",
+      registration_number: "REG-E2E-001",
+      receipt_line: PURCHASE_RECEIPT_LINE_ID,
+      asset_item: ASSET_ITEM_ID,
+      destination_store: ASSET_STORE_ID,
+      tracking_method: "SERIALIZED",
+      registered: "1.000",
+      remaining: "0.000",
+      results: [{ asset: ASSET_ID, quantity: "1.000" }],
+    });
+  }
+  if (path === `/api/v1/assets/assets/${ASSET_ID}/` && request.method === "GET")
+    return workspaceAsset && selectedCompanyId === COMPANY_A.id
+      ? json(response, 200, assetBody())
+      : json(response, 404, { detail: "Not found." });
+  if (
+    path === `/api/v1/assets/assets/${ASSET_ID}/` &&
+    request.method === "PATCH"
+  ) {
+    workspaceAsset = { ...workspaceAsset, ...(await readJsonBody(request)) };
+    return json(response, 200, assetBody());
+  }
+  if (path?.startsWith("/api/v1/assets/assets/?"))
+    return json(response, 200, {
+      count: workspaceAsset && selectedCompanyId === COMPANY_A.id ? 1 : 0,
+      next: null,
+      previous: null,
+      results:
+        workspaceAsset && selectedCompanyId === COMPANY_A.id
+          ? [assetBody()]
+          : [],
+    });
+  if (path?.startsWith("/api/v1/assets/movements/?"))
+    return json(response, 200, {
+      count: 0,
+      next: null,
+      previous: null,
+      results: [],
+    });
+  if (
+    path === "/api/v1/assets/issues/from-asset/" &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    assetIssue = { id: ASSET_ISSUE_ID, ...body, status: "DRAFT" };
+    return json(response, 201, issueBody());
+  }
+  for (const [action, target] of [
+    ["submit", "PENDING_APPROVAL"],
+    ["approve", "APPROVED"],
+    ["issue", "ISSUED"],
+    ["return", "RETURNED"],
+  ]) {
+    if (
+      path === `/api/v1/assets/issues/${ASSET_ISSUE_ID}/${action}/` &&
+      request.method === "POST"
+    ) {
+      assetIssue.status = target;
+      return json(response, 200, issueBody());
+    }
+  }
+  if (path?.startsWith("/api/v1/assets/issues/?"))
+    return json(response, 200, {
+      count: assetIssue ? 1 : 0,
+      next: null,
+      previous: null,
+      results: assetIssue ? [issueBody()] : [],
+    });
   if (path === "/api/v1/finance/vendors/" && request.method === "POST") {
     const body = await readJsonBody(request);
     vendor = {
@@ -1136,10 +1555,15 @@ createServer(async (request, response) => {
       results: vendorPayment ? [vendorPayment] : [],
     });
 
-  const selectedCompanyId = contextBody(request, actor).selected_company?.id;
+  if (path?.startsWith("/api/v1/organization/branches/"))
+    return json(response, 200, {
+      count: 1,
+      next: null,
+      previous: null,
+      results: [{ id: COMPANY_A.id, code: "HQ", name: "Head office" }],
+    });
   if (
     [
-      "/api/v1/organization/branches/",
       "/api/v1/organization/departments/",
       "/api/v1/organization/designations/",
     ].some((prefix) => path?.startsWith(prefix))

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from django.contrib.auth.models import Permission
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from dsms.assets.enums import (
@@ -371,3 +372,100 @@ def test_assets_superuser_retains_unrestricted_operational_and_financial_access(
     response = client.get(reverse("asset-detail", args=[second["asset"].id]))
     assert response.status_code == 200
     assert response.data["acquisition_cost"] == "125.00"
+
+
+def test_serialized_asset_issue_request_and_return_use_authoritative_services() -> None:
+    branch = BranchFactory.create()
+    record = asset_record(branch, "WORKSPACE")
+    maker, checker = UserFactory.create(), UserFactory.create()
+    grant(
+        maker,
+        "view_asset",
+        "add_assetissue",
+        "view_assetissue",
+        "change_assetissue",
+        branch=branch,
+    )
+    grant(
+        checker,
+        "view_assetissue",
+        "approve_asset_issue",
+        "issue_asset",
+        "add_assetreturn",
+        branch=branch,
+    )
+    client = APIClient()
+    client.force_authenticate(maker)
+    created = client.post(
+        reverse("asset-issue-from-asset"),
+        {
+            "asset": str(record["asset"].id),
+            "issue_number": "ISSUE-WORKSPACE-NEW",
+            "issue_type": IssueType.LONG_TERM,
+            "branch": str(branch.id),
+            "purpose": "Branch custody",
+        },
+        format="json",
+    )
+    assert created.status_code == 201, created.data
+    issue_id = created.data["id"]
+    assert str(created.data["lines"][0]["serialized_asset"]) == str(record["asset"].id)
+    assert client.post(reverse("asset-issue-submit", args=[issue_id])).status_code == 200
+
+    client.force_authenticate(checker)
+    assert client.post(reverse("asset-issue-approve", args=[issue_id])).status_code == 200
+    issued = client.post(reverse("asset-issue-issue", args=[issue_id]))
+    assert issued.status_code == 200, issued.data
+    record["asset"].refresh_from_db()
+    assert record["asset"].status == AssetStatus.ISSUED
+    assert record["asset"].current_branch == branch
+
+    returned = client.post(
+        reverse("asset-issue-return-asset", args=[issue_id]),
+        {
+            "return_number": "RETURN-WORKSPACE-NEW",
+            "return_condition": "GOOD",
+            "returned_at": timezone.now().isoformat(),
+            "damage_notes": "",
+            "requires_maintenance": False,
+        },
+        format="json",
+    )
+    assert returned.status_code == 200, returned.data
+    assert returned.data["status"] == "COMPLETED"
+    record["asset"].refresh_from_db()
+    assert record["asset"].status == AssetStatus.AVAILABLE
+    assert record["asset"].current_warehouse == record["store"]
+
+
+def test_asset_issue_request_rejects_cross_company_recipient_and_foreign_return() -> None:
+    branch_a, branch_b = BranchFactory.create(), BranchFactory.create()
+    record_a, record_b = asset_record(branch_a, "BOUNDARY-A"), asset_record(branch_b, "BOUNDARY-B")
+    user = UserFactory.create()
+    grant(user, "view_asset", "add_assetissue", branch=branch_a)
+    grant(user, "view_asset", "add_assetissue", "add_assetreturn", branch=branch_b)
+    client = APIClient()
+    client.force_authenticate(user)
+    rejected = client.post(
+        reverse("asset-issue-from-asset"),
+        {
+            "asset": str(record_a["asset"].id),
+            "issue_number": "ISSUE-CROSS",
+            "issue_type": IssueType.LONG_TERM,
+            "branch": str(branch_b.id),
+            "purpose": "Cross tenant probe",
+        },
+        format="json",
+    )
+    assert rejected.status_code == 404
+    foreign_return = client.post(
+        reverse("asset-issue-return-asset", args=[record_a["issue"].id]),
+        {
+            "return_number": "RETURN-CROSS",
+            "return_condition": "GOOD",
+            "returned_at": timezone.now().isoformat(),
+        },
+        format="json",
+    )
+    assert foreign_return.status_code == 404
+    assert record_b["asset"].company == branch_b.company

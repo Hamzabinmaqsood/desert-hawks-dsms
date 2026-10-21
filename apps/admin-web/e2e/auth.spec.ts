@@ -779,3 +779,145 @@ test("read-only workspace user sees lists without create or edit actions", async
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Add client" })).toHaveCount(0);
 });
+
+test("operations administrator completes Procurement receipt and Asset custody journeys", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await signIn(page, "operationsadmin@example.test");
+  const switcher = page.getByLabel("Active Company");
+  await switcher.selectOption(COMPANY_A_ID);
+  const primaryNavigation = page.getByLabel("Primary navigation");
+  await expect(
+    primaryNavigation.getByRole("link", {
+      name: "Purchase Requisitions",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    primaryNavigation.getByRole("link", { name: "Assets", exact: true }),
+  ).toBeVisible();
+
+  await primaryNavigation
+    .getByRole("link", { name: "Purchase Requisitions", exact: true })
+    .click();
+  await page.getByRole("link", { name: "New requisition" }).click();
+  await page.getByLabel("Requisition number").fill("PR-E2E-001");
+  await page.getByLabel("Required date").fill("2026-11-01");
+  await page.getByLabel("Purpose").fill("Laptop acquisition");
+  await page.getByLabel("Description").fill("Laptop");
+  await page.getByLabel("Quantity").fill("1");
+  await page.getByLabel("Estimated unit price").fill("1000");
+  await page.getByLabel("Expense account").selectOption({ index: 1 });
+  await page.getByRole("button", { name: "Save requisition" }).click();
+  await expect(page).toHaveURL(/purchase-requisitions\/8500/);
+  await page.getByText("Submit for approval").click();
+  await page.getByRole("button", { name: "Confirm submit" }).click();
+  await expect(page.getByText("Submitted")).toBeVisible();
+  await page.getByText("Approve").click();
+  await page.getByRole("button", { name: "Confirm approval" }).click();
+  await page.getByRole("link", { name: "Create Purchase Order" }).click();
+
+  await page.getByLabel("Vendor").selectOption({ index: 1 });
+  await page.getByLabel("Order number").fill("PO-E2E-001");
+  await page.getByLabel("Order date").fill("2026-10-20");
+  await page.getByLabel("Unit price").fill("950");
+  await page.getByRole("button", { name: "Save Purchase Order" }).click();
+  await page.getByText("Submit for approval").click();
+  await page.getByRole("button", { name: "Confirm submit" }).click();
+  await page.getByText("Approve").click();
+  await page.getByRole("button", { name: "Confirm approval" }).click();
+  await page.getByRole("link", { name: "Record receipt" }).click();
+
+  await page.getByLabel("Receipt number").fill("GRN-E2E-001");
+  await page.getByLabel("Receipt date").fill("2026-10-20");
+  await page.getByRole("button", { name: "Save Purchase Receipt" }).click();
+  await expect(page).toHaveURL(/purchase-receipts\/8700/);
+  await page.getByText("Confirm receipt").first().click();
+  await page.getByRole("button", { name: "Confirm receipt" }).click();
+  await expect(page.getByText("Approved")).toBeVisible();
+  await page.getByRole("link", { name: "Register received Assets" }).click();
+
+  await page.getByLabel("Receipt line").selectOption({ index: 1 });
+  await page.getByLabel("Catalog item").selectOption({ index: 1 });
+  await page.getByLabel("Destination Store").selectOption({ index: 1 });
+  await page.getByLabel("Serial number").fill("SER-E2E-001");
+  await page.getByRole("button", { name: "Register inventory" }).click();
+  await expect(
+    page.getByRole("heading", { name: "AST-E2E-001" }),
+  ).toBeVisible();
+  await page
+    .locator("summary")
+    .filter({ hasText: "Create issue request" })
+    .click();
+  await page.getByLabel("Issue number").fill("ISS-E2E-001");
+  await page
+    .getByRole("combobox", { name: "Branch", exact: true })
+    .selectOption({ index: 1 });
+  await page.getByLabel("Purpose").fill("Branch operations");
+  await page.getByRole("button", { name: "Create issue request" }).click();
+  await page.getByText("Submit issue request").click();
+  await page.getByRole("button", { name: "Confirm submit" }).click();
+  await page.getByText("Approve issue").click();
+  await page.getByRole("button", { name: "Confirm approval" }).click();
+  await page.getByText("Issue Asset").click();
+  await page.getByRole("button", { name: "Confirm issue" }).click();
+  await page.getByText("Receive return").click();
+  await page.getByLabel("Return number").fill("RET-E2E-001");
+  await page.getByRole("button", { name: "Confirm return" }).click();
+  await expect(page.getByText("Available")).toBeVisible();
+
+  await expect(
+    primaryNavigation.getByRole("link", {
+      name: "Purchase Requisitions",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    primaryNavigation.getByRole("link", { name: "Assets", exact: true }),
+  ).toBeVisible();
+  await primaryNavigation
+    .getByRole("link", { name: "Purchase Requisitions", exact: true })
+    .click();
+  await expect(page.getByRole("link", { name: "PR-E2E-001" })).toBeVisible();
+
+  await page.getByLabel("Active Company").selectOption(COMPANY_B_ID);
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(
+    primaryNavigation.getByRole("link", {
+      name: "Purchase Requisitions",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    primaryNavigation.getByRole("link", { name: "Assets", exact: true }),
+  ).toHaveCount(0);
+  await primaryNavigation
+    .getByRole("link", { name: "Purchase Requisitions", exact: true })
+    .click();
+  await expect(page.getByText("PR-E2E-001")).toHaveCount(0);
+  await expect(
+    page.getByText("No Purchase Requisitions match this Company and filter."),
+  ).toBeVisible();
+  await page.goto("/assets");
+  await expect(
+    page.getByRole("heading", { name: "Module unavailable" }),
+  ).toBeVisible();
+  await expect(page.getByText("AST-E2E-001")).toHaveCount(0);
+
+  await page.getByLabel("Active Company").selectOption(COMPANY_A_ID);
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(
+    primaryNavigation.getByRole("link", {
+      name: "Purchase Requisitions",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    primaryNavigation.getByRole("link", { name: "Assets", exact: true }),
+  ).toBeVisible();
+  await primaryNavigation
+    .getByRole("link", { name: "Assets", exact: true })
+    .click();
+  await expect(page.getByRole("link", { name: "AST-E2E-001" })).toBeVisible();
+});

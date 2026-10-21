@@ -16,7 +16,9 @@ from dsms.finance.procurement_models import PurchaseReceiptLine
 from dsms.identity import access
 from dsms.identity.models import User
 from dsms.identity.permissions import HasRBACPermission
+from dsms.organization.models import Branch
 from dsms.subscriptions.api.enforcement import TenantModuleViewMixin
+from dsms.workforce.models import Employee
 
 from .. import selectors
 from ..models import (
@@ -33,6 +35,8 @@ from ..models import (
 from ..services import (
     ProcurementRegistrationConflict,
     approve_asset_issue,
+    create_and_receive_serialized_asset_return,
+    create_serialized_asset_issue_request,
     get_stock_balance,
     issue_assets,
     register_procurement_inventory,
@@ -42,10 +46,13 @@ from ..tenant_queries import tenant_consistent_procurement_handoffs
 from .serializers import (
     AssetCategorySerializer,
     AssetFinancialSerializer,
+    AssetIssueRequestSerializer,
     AssetIssueSerializer,
     AssetItemFinancialSerializer,
     AssetItemSerializer,
     AssetMovementSerializer,
+    AssetReturnRequestSerializer,
+    AssetReturnSerializer,
     AssetStoreSerializer,
     ProcurementAvailabilitySerializer,
     ProcurementRegistrationCreateSerializer,
@@ -229,12 +236,22 @@ class StockAccountViewSet(TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[S
 class AssetIssueViewSet(NoDeleteModelViewSet[AssetIssue]):
     serializer_class = AssetIssueSerializer
     permission_classes = [permissions.IsAuthenticated, HasRBACPermission]
-    filterset_fields = ["company", "status", "issue_type", "employee", "site", "branch"]
+    filterset_fields = [
+        "company",
+        "status",
+        "issue_type",
+        "employee",
+        "site",
+        "branch",
+        "lines__serialized_asset",
+    ]
     search_fields = ["issue_number", "purpose"]
     custom_action_permissions = {
+        "from_asset": "assets.add_assetissue",
         "submit": "assets.change_assetissue",
         "approve": "assets.approve_asset_issue",
         "issue": "assets.issue_asset",
+        "return_asset": "assets.add_assetreturn",
     }
 
     def get_queryset(self) -> QuerySet[AssetIssue]:
@@ -299,6 +316,69 @@ class AssetIssueViewSet(NoDeleteModelViewSet[AssetIssue]):
     @decorators.action(detail=True, methods=["post"])
     def issue(self, request: Any, pk: str | None = None) -> response.Response:
         return self._workflow(issue_assets)
+
+    @decorators.action(detail=False, methods=["post"], url_path="from-asset")
+    def from_asset(self, request: Any) -> response.Response:
+        incoming = AssetIssueRequestSerializer(data=request.data)
+        incoming.is_valid(raise_exception=True)
+        data = incoming.validated_data
+        user = cast(User, request.user)
+        asset = get_object_or_404(
+            selectors.accessible_assets(user=user, permission=self.get_scope_permission()),
+            pk=data["asset"],
+        )
+        employee = (
+            get_object_or_404(Employee, pk=data["employee"], company=asset.company)
+            if data.get("employee")
+            else None
+        )
+        branch = (
+            get_object_or_404(Branch, pk=data["branch"], company=asset.company)
+            if data.get("branch")
+            else None
+        )
+        try:
+            item = create_serialized_asset_issue_request(
+                asset=asset,
+                requested_by=user,
+                issue_number=str(data["issue_number"]),
+                issue_type=str(data["issue_type"]),
+                purpose=str(data["purpose"]),
+                employee=employee,
+                branch=branch,
+                expected_return_at=data.get("expected_return_at"),
+                notes=str(data.get("notes", "")),
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                exc.message_dict if hasattr(exc, "message_dict") else exc.messages
+            ) from exc
+        return response.Response(
+            AssetIssueSerializer(item, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @decorators.action(detail=True, methods=["post"], url_path="return")
+    def return_asset(self, request: Any, pk: str | None = None) -> response.Response:
+        incoming = AssetReturnRequestSerializer(data=request.data)
+        incoming.is_valid(raise_exception=True)
+        data = incoming.validated_data
+        try:
+            item = create_and_receive_serialized_asset_return(
+                issue=self.get_object(),
+                received_by=cast(User, request.user),
+                return_number=str(data["return_number"]),
+                return_condition=str(data["return_condition"]),
+                returned_at=data["returned_at"],
+                damage_notes=str(data.get("damage_notes", "")),
+                requires_maintenance=bool(data.get("requires_maintenance", False)),
+                notes=str(data.get("notes", "")),
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                exc.message_dict if hasattr(exc, "message_dict") else exc.messages
+            ) from exc
+        return response.Response(AssetReturnSerializer(item).data)
 
 
 class AssetMovementViewSet(TenantModuleViewMixin, viewsets.ReadOnlyModelViewSet[AssetMovement]):

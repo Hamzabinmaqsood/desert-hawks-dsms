@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ErrorState, LoadingState } from "@/components/ui/states";
 import { useAuth } from "@/features/auth/auth-context";
 import type { AuthContextValue } from "@/features/auth/auth-context";
+import { apiFetch } from "@/lib/api/client";
 import type { ModuleId } from "@/lib/modules";
 
 export interface DashboardWidgetContext {
@@ -24,6 +25,50 @@ export interface DashboardWidgetDefinition {
     signal: AbortSignal,
   ) => Promise<unknown>;
   render: (context: DashboardWidgetContext, data: unknown) => ReactNode;
+}
+
+interface ReceivablesSummary {
+  ageing: Record<string, string>;
+}
+
+function BillingWidget({ auth }: { auth: AuthContextValue }) {
+  const [summary, setSummary] = useState<ReceivablesSummary | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    apiFetch<ReceivablesSummary>("/api/billing-summary", {
+      signal: controller.signal,
+    })
+      .then((value) => current && setSummary(value))
+      .catch(() => undefined);
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, []);
+  const overdue = summary
+    ? ["1-30", "31-60", "61-90", "91-120", "120+"].reduce(
+        (total, bucket) => total + Number(summary.ageing[bucket] ?? 0),
+        0,
+      )
+    : null;
+  return (
+    <div>
+      {overdue !== null ? (
+        <p>
+          <strong>{overdue.toFixed(2)}</strong> overdue across AR ageing buckets
+        </p>
+      ) : (
+        <p>Review invoices and Company billing prerequisites.</p>
+      )}
+      <div className="quick-actions">
+        <Link href="/invoices">View invoices</Link>
+        {auth.can("billing.add_clientinvoice") ? (
+          <Link href="/invoices/new">Create an invoice</Link>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 export function isDashboardWidgetVisible(
@@ -145,6 +190,28 @@ export const defaultDashboardWidgets: DashboardWidgetDefinition[] = [
             <Link href="/contracts/new">Create the first contract</Link>
           </li>
         ) : null}
+        {auth.hasModule("billing_receivables") &&
+        auth.can("billing.view_clientbillingprofile") ? (
+          <li>
+            <Link href="/clients">
+              Review Client Billing Profiles and accounting prerequisites
+            </Link>
+          </li>
+        ) : null}
+        {auth.hasModule("procurement_payables") &&
+        auth.can("finance.add_purchaserequisition") ? (
+          <li>
+            <Link href="/purchase-requisitions/new">
+              Create a Purchase Requisition
+            </Link>
+          </li>
+        ) : null}
+        {auth.hasModule("asset_management") &&
+        auth.canAny("assets.register_asset", "assets.receive_asset_stock") ? (
+          <li>
+            <Link href="/assets/new">Register received Assets</Link>
+          </li>
+        ) : null}
       </ul>
     ),
   },
@@ -192,18 +259,11 @@ export const defaultDashboardWidgets: DashboardWidgetDefinition[] = [
     order: 30,
     moduleId: "billing_receivables",
     permissions: ["billing.view_clientinvoice"],
-    render: ({ auth }) => (
-      <div className="quick-actions">
-        <Link href="/invoices">View invoices</Link>
-        {auth.can("billing.add_clientinvoice") ? (
-          <Link href="/invoices/new">Create an invoice</Link>
-        ) : null}
-      </div>
-    ),
+    render: ({ auth }) => <BillingWidget auth={auth} />,
   },
   {
     id: "payables-actions",
-    title: "Vendors & payables",
+    title: "Procurement & payables",
     order: 40,
     moduleId: "procurement_payables",
     permissions: ["finance.view_vendor"],
@@ -212,6 +272,35 @@ export const defaultDashboardWidgets: DashboardWidgetDefinition[] = [
         <Link href="/vendors">View vendors</Link>
         {auth.can("finance.add_vendor") ? (
           <Link href="/vendors/new">Add a vendor</Link>
+        ) : null}
+        {auth.can("finance.view_purchaserequisition") ? (
+          <Link href="/purchase-requisitions">Purchase Requisitions</Link>
+        ) : null}
+        {auth.can("finance.add_purchaserequisition") ? (
+          <Link href="/purchase-requisitions/new">
+            New Purchase Requisition
+          </Link>
+        ) : null}
+        {auth.can("finance.view_purchaseorder") ? (
+          <Link href="/purchase-orders">Purchase Orders</Link>
+        ) : null}
+        {auth.can("finance.view_purchasereceipt") ? (
+          <Link href="/purchase-receipts">Purchase Receipts</Link>
+        ) : null}
+      </div>
+    ),
+  },
+  {
+    id: "asset-actions",
+    title: "Asset Management",
+    order: 50,
+    moduleId: "asset_management",
+    permissions: ["assets.view_asset"],
+    render: ({ auth }) => (
+      <div className="quick-actions">
+        <Link href="/assets">View Assets</Link>
+        {auth.canAny("assets.register_asset", "assets.receive_asset_stock") ? (
+          <Link href="/assets/new">Register received Assets</Link>
         ) : null}
       </div>
     ),

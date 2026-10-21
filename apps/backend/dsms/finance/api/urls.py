@@ -20,6 +20,11 @@ from .payment_views import (
     PaymentProviderViewSet,
     PaymentSettlementViewSet,
 )
+from .procurement_views import (
+    PurchaseOrderViewSet,
+    PurchaseReceiptViewSet,
+    PurchaseRequisitionViewSet,
+)
 from .vendor_bill_views import VendorBillExpenseAccountViewSet, VendorBillViewSet
 from .vendor_payment_views import (
     PayableVendorBillViewSet,
@@ -47,6 +52,11 @@ router.register("payment-batches", PaymentBatchViewSet, basename="payment-batch"
 router.register("payment-instructions", PaymentInstructionViewSet, basename="payment-instruction")
 router.register("payment-settlements", PaymentSettlementViewSet, basename="payment-settlement")
 router.register("vendors", VendorViewSet, basename="vendor")
+router.register(
+    "purchase-requisitions", PurchaseRequisitionViewSet, basename="purchase-requisition"
+)
+router.register("purchase-orders", PurchaseOrderViewSet, basename="purchase-order")
+router.register("purchase-receipts", PurchaseReceiptViewSet, basename="purchase-receipt")
 router.register("vendor-bills", VendorBillViewSet, basename="vendor-bill")
 router.register("vendor-payments", VendorPaymentViewSet, basename="vendor-payment")
 router.register(

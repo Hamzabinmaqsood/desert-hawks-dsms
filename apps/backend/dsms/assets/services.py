@@ -28,6 +28,7 @@ from .models import (
     AssetKitTemplate,
     AssetMovement,
     AssetReturn,
+    AssetReturnLine,
     AssetStore,
     ProcurementInventoryAllocation,
     ProcurementInventoryHandoff,
@@ -572,6 +573,112 @@ def issue_assets(*, issue: AssetIssue, issued_by: User) -> AssetIssue:
         object_reference=issue.issue_number,
     )
     return issue
+
+
+@transaction.atomic
+@requires_company_module("asset_management", argument="asset")
+def create_serialized_asset_issue_request(
+    *,
+    asset: Asset,
+    requested_by: User,
+    issue_number: str,
+    issue_type: str,
+    purpose: str,
+    employee: Any = None,
+    branch: Any = None,
+    expected_return_at: Any = None,
+    notes: str = "",
+) -> AssetIssue:
+    locked = Asset.objects.select_for_update().select_related("item__category").get(pk=asset.pk)
+    if locked.item.category.tracking_method != TrackingMethod.SERIALIZED:
+        raise ValidationError("Only serialized Assets can use an Asset issue request.")
+    if locked.status != AssetStatus.AVAILABLE:
+        raise ValidationError("Only an available Asset can be issued.")
+    recipients = [value for value in (employee, branch) if value is not None]
+    if len(recipients) != 1:
+        raise ValidationError("Select exactly one Employee or Branch recipient.")
+    recipient = recipients[0]
+    if recipient.company_id != locked.company_id:
+        raise ValidationError("The issue recipient must belong to the Asset company.")
+    issue = AssetIssue(
+        issue_number=issue_number,
+        company=locked.company,
+        issue_type=issue_type,
+        employee=employee,
+        branch=branch,
+        requested_by=requested_by,
+        expected_return_at=expected_return_at,
+        purpose=purpose,
+        notes=notes,
+    )
+    issue.full_clean()
+    issue.save()
+    stock_account = None
+    if locked.current_warehouse_id:
+        stock_account = StockAccount.objects.filter(
+            company=locked.company,
+            item=locked.item,
+            store=locked.current_warehouse,
+        ).first()
+    AssetIssueLine.objects.create(
+        asset_issue=issue,
+        item=locked.item,
+        serialized_asset=locked,
+        stock_account=stock_account,
+        requested_quantity=Decimal("1"),
+        condition_at_issue=locked.condition,
+    )
+    return issue
+
+
+@transaction.atomic
+@requires_company_module("asset_management", argument="issue")
+def create_and_receive_serialized_asset_return(
+    *,
+    issue: AssetIssue,
+    received_by: User,
+    return_number: str,
+    return_condition: str,
+    returned_at: Any,
+    damage_notes: str = "",
+    requires_maintenance: bool = False,
+    notes: str = "",
+) -> AssetReturn:
+    locked = (
+        AssetIssue.objects.select_for_update()
+        .prefetch_related("lines__serialized_asset")
+        .get(pk=issue.pk)
+    )
+    serialized_lines = [line for line in locked.lines.all() if line.serialized_asset_id]
+    if locked.status not in {IssueStatus.ISSUED, IssueStatus.PARTIALLY_RETURNED}:
+        raise ValidationError("Only an issued Asset can be returned.")
+    outstanding = [
+        line
+        for line in serialized_lines
+        if line.returned_quantity < (line.issued_quantity or Decimal("0"))
+    ]
+    if len(outstanding) != 1:
+        raise ValidationError("The issue must contain one outstanding serialized Asset.")
+    line = outstanding[0]
+    record = AssetReturn.objects.create(
+        return_number=return_number,
+        original_issue=locked,
+        returned_by_employee=locked.employee,
+        received_by=received_by,
+        returned_at=returned_at,
+        notes=notes,
+    )
+    AssetReturnLine.objects.create(
+        return_record=record,
+        issue_line=line,
+        serialized_asset=line.serialized_asset,
+        quantity=Decimal("1"),
+        return_condition=return_condition,
+        damage_notes=damage_notes,
+        requires_maintenance=requires_maintenance,
+        received_at=returned_at,
+    )
+    return receive_asset_return(return_record=record)
 
 
 @transaction.atomic

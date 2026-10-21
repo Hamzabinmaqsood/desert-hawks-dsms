@@ -20,10 +20,12 @@ function listOf<T>(body: unknown): T[] {
   return [];
 }
 
-export async function listBillingProfiles() {
+export async function listBillingProfiles(
+  query: Record<string, string> = { is_active: "true" },
+) {
   return listOf<BillingProfile>(
     await apiFetch("/api/reference/billing-profiles", {
-      query: { is_active: "true" },
+      query,
     }),
   );
 }

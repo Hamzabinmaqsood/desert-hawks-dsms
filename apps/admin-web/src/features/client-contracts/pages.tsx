@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { FormError, FormField } from "@/components/ui/form-field";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/states";
 import { useAuth } from "@/features/auth/auth-context";
+import { listBillingProfiles } from "@/features/invoices/reference-api";
+import type { BillingProfile } from "@/features/invoices/types";
 import { ApiError } from "@/lib/api/client";
 import {
   activateClient,
@@ -738,6 +740,10 @@ export function ClientDetailPage({ id }: { id: string }) {
   const auth = useAuth();
   const companyId = selectedCompany(auth);
   const [client, setClient] = useState<Client | null>(null);
+  const [billingProfile, setBillingProfile] = useState<BillingProfile | null>(
+    null,
+  );
+  const [billingProfileLoaded, setBillingProfileLoaded] = useState(false);
   const [error, setError] = useState("");
   const requestId = useRef(0);
   const load = useCallback(() => {
@@ -761,6 +767,25 @@ export function ClientDetailPage({ id }: { id: string }) {
       });
   }, [id]);
   useEffect(load, [companyId, load]);
+  useEffect(() => {
+    if (
+      !auth.hasModule("billing_receivables") ||
+      !auth.can("billing.view_clientbillingprofile")
+    )
+      return;
+    let current = true;
+    listBillingProfiles({ client: id })
+      .then((profiles) => {
+        if (current) {
+          setBillingProfile(profiles[0] ?? null);
+          setBillingProfileLoaded(true);
+        }
+      })
+      .catch(() => current && setBillingProfileLoaded(true));
+    return () => {
+      current = false;
+    };
+  }, [auth, companyId, id]);
   if (!auth.can("contracts.view_client"))
     return <ErrorState message="You do not have permission to view clients." />;
   if (error) return <ErrorState message={error} />;
@@ -829,6 +854,28 @@ export function ClientDetailPage({ id }: { id: string }) {
           <dd>{client.account_manager_name || "Unassigned"}</dd>
         </dl>
       </section>
+      {auth.hasModule("billing_receivables") &&
+      auth.can("billing.view_clientbillingprofile") ? (
+        <section className="detail-card">
+          <h2>Billing Profile</h2>
+          {!billingProfileLoaded ? (
+            <LoadingState label="Loading Billing Profile..." />
+          ) : billingProfile ? (
+            <dl className="detail-grid">
+              <dt>Billing name</dt>
+              <dd>{billingProfile.billing_name}</dd>
+              <dt>Currency</dt>
+              <dd>{billingProfile.currency}</dd>
+              <dt>Payment terms</dt>
+              <dd>{billingProfile.payment_terms_days} days</dd>
+              <dt>Status</dt>
+              <dd>{billingProfile.is_active ? "Active" : "Inactive"}</dd>
+            </dl>
+          ) : (
+            <EmptyState message="No Billing Profile is configured. Invoice creation requires a Company-scoped Billing Profile and receivable account configuration." />
+          )}
+        </section>
+      ) : null}
       <ClientRelationships client={client} />
     </>
   );
