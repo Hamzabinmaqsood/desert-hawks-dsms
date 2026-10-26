@@ -2,10 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-async function waitFor(url: string) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+async function waitFor(url: string, init?: RequestInit) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
-      if ((await fetch(url)).ok) return;
+      if ((await fetch(url, init)).ok) return;
     } catch {
       // The process is still starting.
     }
@@ -54,6 +54,14 @@ export default async function globalSetup() {
     await Promise.all([
       waitFor("http://127.0.0.1:4010/api/v1/health/"),
       waitFor("http://127.0.0.1:3100/login"),
+      waitFor("http://127.0.0.1:3100/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "employee@example.test",
+          password: "e2e-startup-probe",
+        }),
+      }),
     ]);
   } catch (error) {
     stop(web);

@@ -43,6 +43,35 @@ export const navigationGroups: NavigationGroup[] = [
         moduleId: "people",
         order: 10,
       },
+      {
+        label: "Recruitment",
+        href: "/recruitment",
+        permissions: [
+          "recruitment.view_manpowerrequisition",
+          "recruitment.view_candidate",
+          "recruitment.view_candidateapplication",
+        ],
+        moduleId: "recruitment",
+        order: 20,
+      },
+      {
+        label: "Leave",
+        href: "/leave",
+        permissions: [
+          "leave.view_own_leave_request",
+          "leave.view_team_availability",
+          "leave.approve_leave_request",
+        ],
+        moduleId: "leave",
+        order: 30,
+      },
+      {
+        label: "Learning & Qualifications",
+        href: "/learning",
+        permissions: ["training.view_trainingcourse"],
+        moduleId: "learning",
+        order: 40,
+      },
     ],
   },
   {

@@ -7,6 +7,7 @@ from django.http import Http404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
+from rest_framework import serializers as drf_serializers
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
@@ -22,6 +23,7 @@ from dsms.subscriptions.api.enforcement import (
 )
 
 from .. import models, selectors, services
+from ..exceptions import RecruitmentError
 from . import security, serializers
 
 CREATE_ACTOR_FIELDS = {
@@ -52,6 +54,9 @@ class NoDeleteViewSet(
     model: type[Any]
 
     def get_scope_permission(self):
+        custom_permission = getattr(self, "custom_action_permissions", {}).get(self.action)
+        if custom_permission:
+            return custom_permission
         verb = (
             "view"
             if self.action in {"list", "retrieve"}
@@ -126,24 +131,30 @@ class ManpowerRequisitionViewSet(NoDeleteViewSet):
     serializer_class = serializers.ManpowerRequisitionSerializer
     custom_action_permissions = {
         "submit": "recruitment.change_manpowerrequisition",
-        "approve": "recruitment.change_manpowerrequisition",
+        "approve": "recruitment.approve_requisition",
     }
+    filterset_fields = ["company", "status", "branch", "department", "designation"]
+    search_fields = ["reason", "budget_reference", "designation__name"]
+    ordering_fields = ["created_at", "required_by_date", "status"]
 
     @action(detail=True, methods=["post"])
     def submit(self, request, pk=None):
-        return Response(
-            self.get_serializer(
-                services.submit_requisition(requisition=self.get_object(), actor=request.user)
-            ).data
-        )
+        try:
+            item = services.submit_requisition(requisition=self.get_object(), actor=request.user)
+        except RecruitmentError as exc:
+            raise drf_serializers.ValidationError({"detail": str(exc)}) from exc
+        return Response(self.get_serializer(item).data)
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
-        item = services.approve_requisition(
-            requisition=self.get_object(),
-            actor=request.user,
-            approved_headcount=int(request.data["approved_headcount"]),
-        )
+        try:
+            item = services.approve_requisition(
+                requisition=self.get_object(),
+                actor=request.user,
+                approved_headcount=int(request.data["approved_headcount"]),
+            )
+        except (RecruitmentError, KeyError, TypeError, ValueError) as exc:
+            raise drf_serializers.ValidationError({"detail": str(exc)}) from exc
         return Response(self.get_serializer(item).data)
 
 
@@ -154,6 +165,9 @@ class VacancyViewSet(NoDeleteViewSet):
     )
     serializer_class = serializers.VacancySerializer
     custom_action_permissions = {"open": "recruitment.change_vacancy"}
+    filterset_fields = ["company", "status", "manpower_requisition", "designation"]
+    search_fields = ["vacancy_code", "title", "description"]
+    ordering_fields = ["opening_date", "closing_date", "created_at"]
 
     @action(detail=True, methods=["post"])
     def open(self, request, pk=None):
@@ -165,24 +179,47 @@ class EmploymentOfferViewSet(NoDeleteViewSet):
     queryset = models.EmploymentOffer.objects.select_related("application", "company")
     serializer_class = serializers.EmploymentOfferSerializer
     custom_action_permissions = {
-        "approve": "recruitment.change_employmentoffer",
+        "submit": "recruitment.change_employmentoffer",
+        "approve": "recruitment.approve_offer",
+        "issue": "recruitment.change_employmentoffer",
         "accept": "recruitment.change_employmentoffer",
+        "begin_onboarding": "recruitment.add_onboardingcase",
     }
+    filterset_fields = ["company", "status", "application", "designation"]
+    ordering_fields = ["created_at", "proposed_joining_date", "offer_expiry_date"]
+
+    def _offer_action(self, function, **kwargs):
+        try:
+            item = function(offer=self.get_object(), **kwargs)
+        except RecruitmentError as exc:
+            raise drf_serializers.ValidationError({"detail": str(exc)}) from exc
+        return Response(self.get_serializer(item).data)
+
+    @action(detail=True, methods=["post"])
+    def submit(self, request, pk=None):
+        return self._offer_action(services.submit_offer)
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
-        return Response(
-            self.get_serializer(
-                services.approve_offer(offer=self.get_object(), actor=request.user)
-            ).data
-        )
+        return self._offer_action(services.approve_offer, actor=request.user)
+
+    @action(detail=True, methods=["post"])
+    def issue(self, request, pk=None):
+        return self._offer_action(services.issue_offer, actor=request.user)
 
     @action(detail=True, methods=["post"])
     def accept(self, request, pk=None):
+        return self._offer_action(services.accept_offer, actor=request.user)
+
+    @action(detail=True, methods=["post"], url_path="begin-onboarding")
+    def begin_onboarding(self, request, pk=None):
+        try:
+            item = services.begin_onboarding(offer=self.get_object(), assigned_to=request.user)
+        except RecruitmentError as exc:
+            raise drf_serializers.ValidationError({"detail": str(exc)}) from exc
         return Response(
-            self.get_serializer(
-                services.accept_offer(offer=self.get_object(), actor=request.user)
-            ).data
+            serializers.OnboardingCaseSerializer(item, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -194,34 +231,67 @@ class OnboardingViewSet(NoDeleteViewSet):
     serializer_class = serializers.OnboardingCaseSerializer
     custom_action_permissions = {
         "ready_to_hire": "recruitment.change_onboardingcase",
-        "hire": "recruitment.change_onboardingcase",
+        "hire": "recruitment.hire_candidate",
     }
+    filterset_fields = ["company", "status", "application", "candidate"]
+    ordering_fields = ["created_at", "proposed_joining_date"]
 
     @action(detail=True, methods=["post"], url_path="ready-to-hire")
     def ready_to_hire(self, request, pk=None):
-        return Response(
-            self.get_serializer(
-                services.mark_ready_to_hire(onboarding=self.get_object(), actor=request.user)
-            ).data
-        )
+        try:
+            item = services.mark_ready_to_hire(onboarding=self.get_object(), actor=request.user)
+        except RecruitmentError as exc:
+            raise drf_serializers.ValidationError({"detail": str(exc)}) from exc
+        return Response(self.get_serializer(item).data)
 
     @action(detail=True, methods=["post"])
     def hire(self, request, pk=None):
-        employee = services.hire_candidate(
-            onboarding=self.get_object(),
-            actor=request.user,
-            employee_number=request.data.get("employee_number"),
-        )
+        try:
+            employee = services.hire_candidate(
+                onboarding=self.get_object(),
+                actor=request.user,
+                employee_number=request.data.get("employee_number"),
+            )
+        except RecruitmentError as exc:
+            raise drf_serializers.ValidationError({"detail": str(exc)}) from exc
         return Response(
             {"employee_id": employee.pk, "employee_number": employee.employee_number},
             status=status.HTTP_201_CREATED,
         )
 
 
-CandidateViewSet = basic_viewset(models.Candidate, serializers.CandidateSerializer)
-ApplicationViewSet = basic_viewset(
-    models.CandidateApplication, serializers.CandidateApplicationSerializer
-)
+class CandidateViewSet(NoDeleteViewSet):
+    model = models.Candidate
+    queryset = models.Candidate.objects.all()
+    serializer_class = serializers.CandidateSerializer
+    filterset_fields = ["company", "status", "source_type"]
+    search_fields = ["candidate_number", "first_name", "middle_name", "last_name", "email"]
+    ordering_fields = ["created_at", "first_name", "candidate_number"]
+
+
+class ApplicationViewSet(NoDeleteViewSet):
+    model = models.CandidateApplication
+    queryset = models.CandidateApplication.objects.select_related("candidate", "vacancy")
+    serializer_class = serializers.CandidateApplicationSerializer
+    filterset_fields = ["company", "status", "candidate", "vacancy"]
+    search_fields = ["application_number", "candidate__first_name", "vacancy__title"]
+    ordering_fields = ["created_at", "applied_at", "status"]
+    custom_action_permissions = {"transition": "recruitment.change_candidateapplication"}
+
+    @action(detail=True, methods=["post"])
+    def transition(self, request, pk=None):
+        try:
+            item = services.transition_application(
+                application=self.get_object(),
+                status=str(request.data.get("status", "")),
+                actor=request.user,
+                reason=str(request.data.get("reason", "")),
+            )
+        except RecruitmentError as exc:
+            raise drf_serializers.ValidationError({"detail": str(exc)}) from exc
+        return Response(self.get_serializer(item).data)
+
+
 ScreeningViewSet = basic_viewset(
     models.CandidateScreening, serializers.CandidateScreeningSerializer
 )

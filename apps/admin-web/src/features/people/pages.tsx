@@ -16,6 +16,7 @@ import { FormError, FormField } from "@/components/ui/form-field";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/states";
 import { useAuth } from "@/features/auth/auth-context";
 import { ApiError } from "@/lib/api/client";
+import { EmployeeQualificationSummary } from "@/features/people-operations/pages";
 import {
   createEmployee,
   employeeAction,
@@ -1205,6 +1206,7 @@ export function EmployeeDetailPage({ id }: { id: string }) {
         </dl>
       </section>
       <RelatedPeopleData employee={employee} reloadEmployee={load} />
+      <EmployeeQualificationSummary employeeId={employee.id} />
     </>
   );
 }

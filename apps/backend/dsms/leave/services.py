@@ -304,6 +304,70 @@ def finalize_leave_approval(*, request, actor, approval_step=None, comments=""):
 
 @transaction.atomic
 @requires_company_module("leave", argument="request")
+def reject_leave_request(*, request, actor, reason=""):
+    item = LeaveRequest.objects.select_for_update().get(pk=request.pk)
+    if item.created_by_id == actor.id:
+        raise ValueError("A requester cannot reject their own leave.")
+    if item.status not in {"SUBMITTED", "UNDER_REVIEW"}:
+        raise ValueError("Leave request is not awaiting approval.")
+    if not reason.strip():
+        raise ValueError("A rejection reason is required.")
+    item.status = "REJECTED"
+    item.rejected_by = actor
+    item.rejected_at = timezone.now()
+    item.rejection_reason = reason.strip()
+    item.save(
+        update_fields=[
+            "status",
+            "rejected_by",
+            "rejected_at",
+            "rejection_reason",
+            "updated_at",
+        ]
+    )
+    LeaveEvent.objects.create(
+        leave_request=item,
+        event_type="REJECTED",
+        actor=actor,
+        occurred_at=timezone.now(),
+        description=item.rejection_reason[:250],
+    )
+    return item
+
+
+@transaction.atomic
+@requires_company_module("leave", argument="request")
+def request_leave_cancellation(*, request, actor, reason=""):
+    item = LeaveRequest.objects.select_for_update().get(pk=request.pk)
+    if item.employee.user_id != actor.id:
+        raise ValueError("Only the employee may request cancellation.")
+    if item.status != "APPROVED":
+        raise ValueError("Only approved leave can be submitted for cancellation.")
+    if not reason.strip():
+        raise ValueError("A cancellation reason is required.")
+    item.status = "CANCEL_REQUESTED"
+    item.cancellation_requested_at = timezone.now()
+    item.cancellation_reason = reason.strip()
+    item.save(
+        update_fields=[
+            "status",
+            "cancellation_requested_at",
+            "cancellation_reason",
+            "updated_at",
+        ]
+    )
+    LeaveEvent.objects.create(
+        leave_request=item,
+        event_type="CANCELLATION_REQUESTED",
+        actor=actor,
+        occurred_at=timezone.now(),
+        description=item.cancellation_reason[:250],
+    )
+    return item
+
+
+@transaction.atomic
+@requires_company_module("leave", argument="request")
 def approve_leave_cancellation(*, request, actor):
     item = LeaveRequest.objects.select_for_update().get(pk=request.pk)
     if item.status not in {"APPROVED", "CANCEL_REQUESTED"}:

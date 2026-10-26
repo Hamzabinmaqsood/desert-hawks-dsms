@@ -31,6 +31,46 @@ from .models import (
     Vacancy,
 )
 
+APPLICATION_TRANSITIONS: dict[str, set[str]] = {
+    ApplicationStatus.DRAFT: {ApplicationStatus.APPLIED, ApplicationStatus.CANCELLED},
+    ApplicationStatus.APPLIED: {
+        ApplicationStatus.SCREENING,
+        ApplicationStatus.WITHDRAWN,
+        ApplicationStatus.REJECTED,
+    },
+    ApplicationStatus.SCREENING: {
+        ApplicationStatus.SHORTLISTED,
+        ApplicationStatus.REJECTED,
+    },
+    ApplicationStatus.SHORTLISTED: {
+        ApplicationStatus.INTERVIEW,
+        ApplicationStatus.ASSESSMENT,
+        ApplicationStatus.REJECTED,
+    },
+    ApplicationStatus.INTERVIEW: {
+        ApplicationStatus.ASSESSMENT,
+        ApplicationStatus.BACKGROUND_CHECK,
+        ApplicationStatus.SELECTED,
+        ApplicationStatus.REJECTED,
+    },
+    ApplicationStatus.ASSESSMENT: {
+        ApplicationStatus.BACKGROUND_CHECK,
+        ApplicationStatus.SELECTED,
+        ApplicationStatus.REJECTED,
+    },
+    ApplicationStatus.BACKGROUND_CHECK: {
+        ApplicationStatus.SELECTED,
+        ApplicationStatus.REJECTED,
+    },
+    ApplicationStatus.SELECTED: {ApplicationStatus.OFFERED, ApplicationStatus.REJECTED},
+    ApplicationStatus.OFFERED: {
+        ApplicationStatus.OFFER_ACCEPTED,
+        ApplicationStatus.OFFER_DECLINED,
+    },
+    ApplicationStatus.OFFER_ACCEPTED: {ApplicationStatus.ONBOARDING},
+    ApplicationStatus.ONBOARDING: {ApplicationStatus.HIRED},
+}
+
 
 @requires_company_module("recruitment", argument="application")
 def change_application_status(
@@ -50,6 +90,19 @@ def change_application_status(
             changed_by=actor,
         )
     return application
+
+
+@transaction.atomic
+@requires_company_module("recruitment", argument="application")
+def transition_application(
+    *, application: CandidateApplication, status: str, actor: User, reason: str = ""
+) -> CandidateApplication:
+    application = CandidateApplication.objects.select_for_update().get(pk=application.pk)
+    if status not in APPLICATION_TRANSITIONS.get(application.status, set()):
+        raise InvalidTransition(f"Application cannot move from {application.status} to {status}.")
+    return change_application_status(
+        application=application, status=status, actor=actor, reason=reason
+    )
 
 
 @transaction.atomic
@@ -113,6 +166,33 @@ def approve_offer(*, offer: EmploymentOffer, actor: User) -> EmploymentOffer:
         raise InvalidTransition("Only submitted offers can be approved.")
     offer.status, offer.approved_by, offer.approved_at = OfferStatus.APPROVED, actor, timezone.now()
     offer.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+    return offer
+
+
+@transaction.atomic
+@requires_company_module("recruitment", argument="offer")
+def submit_offer(*, offer: EmploymentOffer) -> EmploymentOffer:
+    offer = EmploymentOffer.objects.select_for_update().get(pk=offer.pk)
+    if offer.status != OfferStatus.DRAFT:
+        raise InvalidTransition("Only draft offers can be submitted.")
+    offer.status = OfferStatus.SUBMITTED
+    offer.save(update_fields=["status", "updated_at"])
+    return offer
+
+
+@transaction.atomic
+@requires_company_module("recruitment", argument="offer")
+def issue_offer(*, offer: EmploymentOffer, actor: User) -> EmploymentOffer:
+    offer = (
+        EmploymentOffer.objects.select_for_update().select_related("application").get(pk=offer.pk)
+    )
+    if offer.status != OfferStatus.APPROVED:
+        raise InvalidTransition("Only approved offers can be issued.")
+    offer.status, offer.issued_at = OfferStatus.ISSUED, timezone.now()
+    offer.save(update_fields=["status", "issued_at", "updated_at"])
+    change_application_status(
+        application=offer.application, status=ApplicationStatus.OFFERED, actor=actor
+    )
     return offer
 
 

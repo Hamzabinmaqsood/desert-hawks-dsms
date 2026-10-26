@@ -111,7 +111,7 @@ def activate_training_course(*, course: TrainingCourse) -> TrainingCourse:
 def schedule_training_session(*, session: TrainingSession) -> TrainingSession:
     session = (
         TrainingSession.objects.select_for_update()
-        .select_related("course", "course_version", "venue")
+        .select_related("course", "course_version")
         .get(pk=session.pk)
     )
     if (
@@ -127,6 +127,44 @@ def schedule_training_session(*, session: TrainingSession) -> TrainingSession:
     if session.venue and not session.venue.is_active:
         raise TrainingValidationError("Inactive venues cannot receive sessions.")
     session.status = TrainingSessionStatus.SCHEDULED
+    session.save(update_fields=["status", "updated_at"])
+    return session
+
+
+@transaction.atomic
+@requires_company_module("learning", argument="session")
+def open_training_session_enrollment(*, session: TrainingSession) -> TrainingSession:
+    session = TrainingSession.objects.select_for_update().get(pk=session.pk)
+    if session.status != TrainingSessionStatus.SCHEDULED:
+        raise InvalidTrainingTransition("Only scheduled sessions can open enrollment.")
+    if session.enrollment_deadline and session.enrollment_deadline < timezone.now():
+        raise InvalidTrainingTransition("The enrollment deadline has passed.")
+    session.status = TrainingSessionStatus.OPEN_FOR_ENROLLMENT
+    session.save(update_fields=["status", "updated_at"])
+    return session
+
+
+@transaction.atomic
+@requires_company_module("learning", argument="session")
+def start_training_session(*, session: TrainingSession) -> TrainingSession:
+    session = TrainingSession.objects.select_for_update().get(pk=session.pk)
+    if session.status not in {
+        TrainingSessionStatus.SCHEDULED,
+        TrainingSessionStatus.OPEN_FOR_ENROLLMENT,
+    }:
+        raise InvalidTrainingTransition("Only scheduled sessions can be started.")
+    session.status = TrainingSessionStatus.IN_PROGRESS
+    session.save(update_fields=["status", "updated_at"])
+    return session
+
+
+@transaction.atomic
+@requires_company_module("learning", argument="session")
+def complete_training_session(*, session: TrainingSession) -> TrainingSession:
+    session = TrainingSession.objects.select_for_update().get(pk=session.pk)
+    if session.status != TrainingSessionStatus.IN_PROGRESS:
+        raise InvalidTrainingTransition("Only in-progress sessions can be completed.")
+    session.status = TrainingSessionStatus.COMPLETED
     session.save(update_fields=["status", "updated_at"])
     return session
 

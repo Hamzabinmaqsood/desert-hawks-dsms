@@ -8,7 +8,7 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
-from rest_framework import mixins, viewsets
+from rest_framework import mixins, serializers, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
@@ -25,6 +25,7 @@ from dsms.subscriptions.api.enforcement import (
 from dsms.workforce.models import Employee
 
 from .. import models, selectors, services
+from ..exceptions import TrainingError
 from . import security
 from .serializers import SERIALIZERS
 
@@ -123,12 +124,17 @@ class CourseViewSet(NoDeleteViewSet):
         "activate": "training.change_trainingcourse",
         "retire": "training.change_trainingcourse",
     }
+    filterset_fields = ["company", "status", "category", "delivery_method"]
+    search_fields = ["code", "title", "description"]
+    ordering_fields = ["code", "title", "created_at", "updated_at"]
 
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
-        return Response(
-            self.get_serializer(services.activate_training_course(course=self.get_object())).data
-        )
+        try:
+            item = services.activate_training_course(course=self.get_object())
+        except TrainingError as exc:
+            raise serializers.ValidationError({"detail": str(exc)}) from exc
+        return Response(self.get_serializer(item).data)
 
     @action(detail=True, methods=["post"])
     def retire(self, request, pk=None):
@@ -144,30 +150,57 @@ class SessionViewSet(NoDeleteViewSet):
     serializer_class = SERIALIZERS["TrainingSession"]
     custom_action_permissions = {
         "schedule": "training.change_trainingsession",
+        "open_enrollment": "training.change_trainingsession",
+        "start": "training.change_trainingsession",
+        "complete": "training.change_trainingsession",
         "enroll": "training.add_trainingenrollment",
     }
+    filterset_fields = ["company", "status", "course", "program", "branch"]
+    search_fields = ["session_number", "course__code", "course__title"]
+    ordering_fields = ["start_datetime", "end_datetime", "created_at"]
+
+    def _session_action(self, function):
+        try:
+            item = function(session=self.get_object())
+        except TrainingError as exc:
+            raise serializers.ValidationError({"detail": str(exc)}) from exc
+        return Response(self.get_serializer(item).data)
 
     @action(detail=True, methods=["post"])
     def schedule(self, request, pk=None):
-        return Response(
-            self.get_serializer(services.schedule_training_session(session=self.get_object())).data
-        )
+        return self._session_action(services.schedule_training_session)
+
+    @action(detail=True, methods=["post"], url_path="open-enrollment")
+    def open_enrollment(self, request, pk=None):
+        return self._session_action(services.open_training_session_enrollment)
+
+    @action(detail=True, methods=["post"])
+    def start(self, request, pk=None):
+        return self._session_action(services.start_training_session)
+
+    @action(detail=True, methods=["post"])
+    def complete(self, request, pk=None):
+        return self._session_action(services.complete_training_session)
 
     @action(detail=True, methods=["post"])
     def enroll(self, request, pk=None):
-        item = services.enroll_employee(
-            session=self.get_object(),
-            employee=get_object_or_404(
-                Employee,
-                pk=request.data["employee"],
-                company_id__in=access.get_accessible_company_ids(
-                    request.user, permission="training.add_trainingenrollment"
-                ),
-                company__is_active=True,
+        employee = get_object_or_404(
+            Employee,
+            pk=request.data.get("employee"),
+            company_id__in=access.get_accessible_company_ids(
+                request.user, permission="training.add_trainingenrollment"
             ),
-            actor=request.user,
-            allow_waitlist=request.data.get("allow_waitlist", True),
+            company__is_active=True,
         )
+        try:
+            item = services.enroll_employee(
+                session=self.get_object(),
+                employee=employee,
+                actor=request.user,
+                allow_waitlist=request.data.get("allow_waitlist", True),
+            )
+        except TrainingError as exc:
+            raise serializers.ValidationError({"detail": str(exc)}) from exc
         return Response(SERIALIZERS["TrainingEnrollment"](item).data, status=201)
 
 
@@ -177,8 +210,10 @@ class EnrollmentViewSet(NoDeleteViewSet):
     serializer_class = SERIALIZERS["TrainingEnrollment"]
     custom_action_permissions = {
         "assessment_result": "training.add_employeetrainingassessmentresult",
-        "finalize_result": "training.add_trainingcompletion",
+        "finalize_result": "training.finalize_training_result",
     }
+    filterset_fields = ["company", "status", "session", "employee"]
+    ordering_fields = ["enrolled_at", "created_at", "status"]
 
     @action(detail=True, methods=["post"], url_path="assessment-result")
     def assessment_result(self, request, pk=None):
@@ -211,6 +246,29 @@ AssessmentResultViewSet = basic_viewset(models.EmployeeTrainingAssessmentResult)
 CompletionViewSet = basic_viewset(models.TrainingCompletion)
 CertificateViewSet = basic_viewset(models.TrainingCertificate)
 ExternalCertificationViewSet = basic_viewset(models.ExternalCertification)
+
+CategoryViewSet.filterset_fields = ["company", "is_active"]
+CategoryViewSet.search_fields = ["code", "name"]
+CourseVersionViewSet.filterset_fields = ["course", "is_current"]
+QualificationTypeViewSet.filterset_fields = ["company", "is_active", "category"]
+QualificationTypeViewSet.search_fields = ["code", "name"]
+EmployeeQualificationViewSet.filterset_fields = [
+    "company",
+    "employee",
+    "qualification_type",
+    "status",
+]
+ProgramViewSet.filterset_fields = ["company", "is_active", "designation"]
+ProgramViewSet.search_fields = ["code", "name"]
+AssessmentViewSet.filterset_fields = ["session", "assessment_type"]
+CompletionViewSet.filterset_fields = ["employee", "course", "session", "passed"]
+CertificateViewSet.filterset_fields = ["company", "employee", "status"]
+ExternalCertificationViewSet.filterset_fields = [
+    "company",
+    "employee",
+    "qualification_type",
+    "verification_status",
+]
 
 
 @module_api_surface("learning")

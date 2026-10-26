@@ -212,6 +212,20 @@ export const defaultDashboardWidgets: DashboardWidgetDefinition[] = [
             <Link href="/assets/new">Register received Assets</Link>
           </li>
         ) : null}
+        {auth.hasModule("recruitment") &&
+        auth.can("recruitment.add_manpowerrequisition") ? (
+          <li>
+            <Link href="/recruitment/requisitions/new">
+              Create the first Job Requisition
+            </Link>
+          </li>
+        ) : null}
+        {auth.hasModule("learning") &&
+        auth.can("training.add_trainingcourse") ? (
+          <li>
+            <Link href="/learning/courses/new">Create the first course</Link>
+          </li>
+        ) : null}
       </ul>
     ),
   },
@@ -226,6 +240,64 @@ export const defaultDashboardWidgets: DashboardWidgetDefinition[] = [
         <Link href="/employees">View employees</Link>
         {auth.can("workforce.add_employee") ? (
           <Link href="/employees/new">Add employee</Link>
+        ) : null}
+      </div>
+    ),
+  },
+  {
+    id: "recruitment-actions",
+    title: "Recruitment",
+    order: 26,
+    moduleId: "recruitment",
+    permissions: [
+      "recruitment.view_manpowerrequisition",
+      "recruitment.view_candidateapplication",
+    ],
+    render: ({ auth }) => (
+      <div className="quick-actions">
+        <Link href="/recruitment">View Recruitment</Link>
+        {auth.can("recruitment.add_manpowerrequisition") ? (
+          <Link href="/recruitment/requisitions/new">
+            Create Job Requisition
+          </Link>
+        ) : null}
+      </div>
+    ),
+  },
+  {
+    id: "leave-actions",
+    title: "Leave",
+    order: 27,
+    moduleId: "leave",
+    permissions: [
+      "leave.view_own_leave_request",
+      "leave.view_team_availability",
+    ],
+    render: ({ auth }) => (
+      <div className="quick-actions">
+        {auth.can("leave.view_own_leave_request") ? (
+          <Link href="/leave">Request Leave</Link>
+        ) : null}
+        {auth.can("leave.view_team_availability") ? (
+          <Link href="/leave">Review Leave requests</Link>
+        ) : null}
+      </div>
+    ),
+  },
+  {
+    id: "learning-actions",
+    title: "Learning & Qualifications",
+    order: 28,
+    moduleId: "learning",
+    permissions: ["training.view_trainingcourse"],
+    render: ({ auth }) => (
+      <div className="quick-actions">
+        <Link href="/learning">View Learning</Link>
+        {auth.can("training.add_trainingcourse") ? (
+          <Link href="/learning/courses/new">Create course</Link>
+        ) : null}
+        {auth.can("training.add_trainingsession") ? (
+          <Link href="/learning/sessions/new">Create session</Link>
         ) : null}
       </div>
     ),

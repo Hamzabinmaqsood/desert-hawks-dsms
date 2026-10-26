@@ -921,3 +921,146 @@ test("operations administrator completes Procurement receipt and Asset custody j
     .click();
   await expect(page.getByRole("link", { name: "AST-E2E-001" })).toBeVisible();
 });
+
+test("People operations workspaces remain generic, tenant-switched, and security-independent", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const forbiddenRequests: string[] = [];
+  page.on("request", (request) => {
+    if (
+      /readiness\/guards|deployment|security[_/-](operations|sites|posts)|guard[_/-]staffing/i.test(
+        request.url(),
+      )
+    )
+      forbiddenRequests.push(request.url());
+  });
+  await signIn(page, "peopleoperations@example.test");
+  const switcher = page.getByLabel("Active Company");
+  await switcher.selectOption(COMPANY_A_ID);
+
+  const navigation = page.getByLabel("Primary navigation");
+  await expect(
+    navigation.getByRole("link", { name: "Recruitment" }),
+  ).toBeVisible();
+  await expect(navigation.getByRole("link", { name: "Leave" })).toBeVisible();
+  await expect(
+    navigation.getByRole("link", { name: "Learning & Qualifications" }),
+  ).toBeVisible();
+
+  await navigation.getByRole("link", { name: "Recruitment" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Job Requisitions" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Customer success specialist").first(),
+  ).toBeVisible();
+  await expect(page.getByText("Sara Ahmed")).toBeVisible();
+  await expect(page.locator("main")).not.toContainText("ManpowerRequisition");
+
+  await page.getByRole("link", { name: "APP-E2E-001" }).click();
+  await expect(page).toHaveURL(
+    /\/recruitment\/applications\/a3000000-0000-4000-8000-000000000001$/,
+    { timeout: 15_000 },
+  );
+  await expect(page.getByRole("heading", { name: "APP-E2E-001" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "Shortlisted" }).click();
+  await expect(page.locator(".status-badge").first()).toHaveText("Shortlisted");
+  page.on("dialog", async (dialog) => {
+    await dialog.accept(dialog.type() === "prompt" ? "EMP-E2E-002" : undefined);
+  });
+  await page.getByRole("button", { name: "Convert to employee" }).click();
+  const employeeLink = page.getByRole("link", { name: "Open employee" });
+  await expect(employeeLink).toBeVisible();
+  await employeeLink.click();
+  await expect(page.getByRole("heading", { name: "Sara Ahmed" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Learning & Qualifications" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Business communication certificate"),
+  ).toBeVisible();
+
+  await navigation.getByRole("link", { name: "Leave" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Request Leave" }),
+  ).toBeVisible();
+  const leaveType = page.getByRole("combobox", { name: /Leave Type/ });
+  await expect(leaveType).toContainText("Annual Leave");
+  await expect(page.getByText("LR-E2E-001")).toBeVisible();
+  await expect(page.getByText("LR-E2E-002")).toBeVisible();
+  await leaveType.selectOption({ label: "Annual Leave" });
+  await page.getByRole("textbox", { name: /Starts/ }).fill("2026-12-01T09:00");
+  await page.getByRole("textbox", { name: /Ends/ }).fill("2026-12-02T09:00");
+  await page.getByRole("textbox", { name: /Reason/ }).fill("Family commitment");
+  await page.getByRole("button", { name: "Submit Leave request" }).click();
+  const myRequests = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "My requests" }),
+  });
+  const managerInbox = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Manager approval inbox" }),
+  });
+  const myNewRequest = myRequests
+    .getByRole("row")
+    .filter({ hasText: "LR-E2E-NEW" });
+  const managerNewRequest = managerInbox
+    .getByRole("row")
+    .filter({ hasText: "LR-E2E-NEW" });
+  await expect(myNewRequest).toContainText("Submitted");
+  await expect(managerNewRequest).toBeVisible();
+  await managerNewRequest.getByRole("button", { name: "Approve" }).click();
+  await expect(myNewRequest).toContainText("Approved");
+  await expect(managerNewRequest).toHaveCount(0);
+  await expect(page.locator("main")).not.toContainText(/guard|deployment/i);
+
+  await navigation
+    .getByRole("link", { name: "Learning & Qualifications" })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Course catalog" }),
+  ).toBeVisible();
+  await expect(page.getByText(/COMM-101/)).toBeVisible();
+  await page.getByRole("link", { name: "LS-E2E-001" }).click();
+  await expect(page).toHaveURL(
+    /\/learning\/sessions\/c2000000-0000-4000-8000-000000000001$/,
+  );
+  await expect(page.locator(".status-badge")).toHaveText("Scheduled");
+  await page.getByRole("button", { name: "Open enrollment" }).click();
+  await expect(page.locator(".status-badge")).toHaveText("Open for enrollment");
+  const employeeId = page.getByRole("textbox", { name: /Employee ID/ });
+  await employeeId.fill("61000000-0000-0000-0000-000000000001");
+  await page.getByRole("button", { name: "Enroll" }).click();
+  await expect(employeeId).toHaveValue("");
+  await page.getByRole("button", { name: "Start" }).click();
+  await expect(page.locator(".status-badge")).toHaveText("In progress");
+  await page.getByRole("button", { name: "Complete" }).click();
+  await expect(page.locator(".status-badge")).toHaveText("Completed");
+  expect(forbiddenRequests).toEqual([]);
+
+  await switcher.selectOption(COMPANY_B_ID);
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(
+    navigation.getByRole("link", { name: "Recruitment" }),
+  ).toHaveCount(0);
+  await expect(navigation.getByRole("link", { name: "Leave" })).toHaveCount(0);
+  await expect(
+    navigation.getByRole("link", { name: "Learning & Qualifications" }),
+  ).toHaveCount(0);
+  await page.goto("/learning");
+  await expect(
+    page.getByRole("heading", { name: "Module unavailable" }),
+  ).toBeVisible();
+  await expect(page.getByText("COMM-101")).toHaveCount(0);
+
+  await switcher.selectOption(COMPANY_A_ID);
+  await expect(
+    navigation.getByRole("link", { name: "Recruitment" }),
+  ).toBeVisible();
+  await navigation.getByRole("link", { name: "Recruitment" }).click();
+  await expect(
+    page.getByText("Customer success specialist").first(),
+  ).toBeVisible();
+  expect(forbiddenRequests).toEqual([]);
+});

@@ -80,6 +80,16 @@ const COMPANY_B = {
     can_manage: false,
   },
 };
+const PEOPLE_COMPANY_A = {
+  ...COMPANY_A,
+  effective_modules: [
+    ...COMPANY_A.effective_modules,
+    "recruitment",
+    "leave",
+    "learning",
+  ],
+  entitlement_revision: 5,
+};
 const companyContexts = new Map();
 const PLATFORM_PLAN = {
   id: "91000000-0000-0000-0000-000000000001",
@@ -373,6 +383,41 @@ const ACTORS = {
       "assets.approve_asset_issue",
       "assets.issue_asset",
       "assets.add_assetreturn",
+    ],
+  },
+  peopleoperations: {
+    id: MAKER_ID,
+    email: "peopleoperations@example.test",
+    first_name: "People",
+    last_name: "Operations",
+    companies: [PEOPLE_COMPANY_A, COMPANY_B],
+    permissions: [
+      "recruitment.view_manpowerrequisition",
+      "recruitment.add_manpowerrequisition",
+      "recruitment.change_manpowerrequisition",
+      "recruitment.approve_requisition",
+      "recruitment.view_candidate",
+      "recruitment.add_candidate",
+      "recruitment.view_candidateapplication",
+      "recruitment.change_candidateapplication",
+      "recruitment.view_employmentoffer",
+      "recruitment.view_onboardingcase",
+      "recruitment.hire_candidate",
+      "leave.view_own_leave_request",
+      "leave.create_own_leave_request",
+      "leave.change_own_draft_leave_request",
+      "leave.view_team_availability",
+      "leave.approve_leave_request",
+      "leave.reject_leave_request",
+      "training.view_trainingcourse",
+      "training.add_trainingcourse",
+      "training.change_trainingcourse",
+      "training.view_trainingsession",
+      "training.add_trainingsession",
+      "training.change_trainingsession",
+      "training.add_trainingenrollment",
+      "training.view_employeequalification",
+      "workforce.view_employee",
     ],
   },
 };
@@ -746,18 +791,67 @@ let workspaceEmployee = null;
 let workspaceClient = null;
 let workspaceContact = null;
 let workspaceContract = null;
+let recruitmentApplicationStatus = "SCREENING";
+let recruitmentHiredEmployee = null;
+let submittedLeaveRequest = null;
+let learningSessionStatus = "SCHEDULED";
+const RECRUITMENT_APPLICATION_ID = "a3000000-0000-4000-8000-000000000001";
+const RECRUITMENT_OFFER_ID = "a5000000-0000-4000-8000-000000000001";
+const RECRUITMENT_ONBOARDING_ID = "a6000000-0000-4000-8000-000000000001";
+const LEAVE_TYPE_ID = "b1000000-0000-4000-8000-000000000001";
+const LEARNING_SESSION_ID = "c2000000-0000-4000-8000-000000000001";
+const recruitmentApplicationBody = () => ({
+  id: RECRUITMENT_APPLICATION_ID,
+  application_number: "APP-E2E-001",
+  candidate: "a2000000-0000-4000-8000-000000000001",
+  vacancy: "a4000000-0000-4000-8000-000000000001",
+  status: recruitmentApplicationStatus,
+  applied_at: "2026-10-20T08:00:00Z",
+  availability_date: null,
+  current_employer: "",
+  current_job_title: "",
+  total_experience_months: 12,
+  hired_employee: recruitmentHiredEmployee,
+});
+const recruitmentOnboardingBody = () => ({
+  id: RECRUITMENT_ONBOARDING_ID,
+  application: RECRUITMENT_APPLICATION_ID,
+  candidate: "a2000000-0000-4000-8000-000000000001",
+  proposed_employee_number: "EMP-E2E-002",
+  proposed_joining_date: "2026-11-01",
+  status: recruitmentHiredEmployee ? "COMPLETED" : "READY_TO_HIRE",
+});
+const learningSessionBody = () => ({
+  id: LEARNING_SESSION_ID,
+  session_number: "LS-E2E-001",
+  course: "c1000000-0000-4000-8000-000000000001",
+  course_version: "c3000000-0000-4000-8000-000000000001",
+  program: null,
+  start_datetime: "2026-11-20T09:00:00Z",
+  end_datetime: "2026-11-20T11:00:00Z",
+  enrollment_deadline: null,
+  capacity: 12,
+  status: learningSessionStatus,
+  notes: "",
+});
 const employeeBody = () => ({
   id: EMPLOYEE_ID,
   company: COMPANY_A.id,
   company_name: COMPANY_A.legal_name,
   user: null,
   user_email: null,
-  employee_number: "EMP-E2E-001",
-  first_name: "Amina",
-  middle_name: "",
-  last_name: "Khan",
-  full_name: "Amina Khan",
-  preferred_name: "Amina",
+  employee_number: workspaceEmployee?.employee_number ?? "EMP-E2E-001",
+  first_name: workspaceEmployee?.first_name ?? "Amina",
+  middle_name: workspaceEmployee?.middle_name ?? "",
+  last_name: workspaceEmployee?.last_name ?? "Khan",
+  full_name: [
+    workspaceEmployee?.first_name ?? "Amina",
+    workspaceEmployee?.middle_name ?? "",
+    workspaceEmployee?.last_name ?? "Khan",
+  ]
+    .filter(Boolean)
+    .join(" "),
+  preferred_name: workspaceEmployee?.preferred_name ?? "Amina",
   father_or_spouse_name: "",
   gender: "UNSPECIFIED",
   date_of_birth: null,
@@ -947,6 +1041,389 @@ createServer(async (request, response) => {
       assignments: [],
     });
   }
+
+  const selectedPeopleCompany = selectedCompanyId === COMPANY_A.id;
+  const peoplePage = (results) => ({
+    count: results.length,
+    next: null,
+    previous: null,
+    results,
+  });
+  if (
+    path ===
+      `/api/v1/recruitment/applications/${RECRUITMENT_APPLICATION_ID}/` &&
+    request.method === "GET"
+  )
+    return selectedPeopleCompany
+      ? json(response, 200, recruitmentApplicationBody())
+      : json(response, 404, { detail: "Not found." });
+  if (
+    path ===
+      `/api/v1/recruitment/applications/${RECRUITMENT_APPLICATION_ID}/transition/` &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    recruitmentApplicationStatus = body.status;
+    return json(response, 200, recruitmentApplicationBody());
+  }
+  if (path?.startsWith("/api/v1/recruitment/offers/?"))
+    return json(
+      response,
+      200,
+      peoplePage(
+        selectedPeopleCompany
+          ? [
+              {
+                id: RECRUITMENT_OFFER_ID,
+                application: RECRUITMENT_APPLICATION_ID,
+                offer_number: "OFF-E2E-001",
+                proposed_joining_date: "2026-11-01",
+                offer_expiry_date: "2026-11-15",
+                status: "ACCEPTED",
+                terms_summary: "Approved employment terms",
+              },
+            ]
+          : [],
+      ),
+    );
+  if (path?.startsWith("/api/v1/recruitment/onboarding/?"))
+    return json(
+      response,
+      200,
+      peoplePage(selectedPeopleCompany ? [recruitmentOnboardingBody()] : []),
+    );
+  if (
+    path ===
+      `/api/v1/recruitment/onboarding/${RECRUITMENT_ONBOARDING_ID}/hire/` &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    workspaceEmployee = {
+      employee_number: body.employee_number,
+      first_name: "Sara",
+      middle_name: "",
+      last_name: "Ahmed",
+      preferred_name: "Sara",
+      personal_email: "sara@example.test",
+      mobile_number: "03001112222",
+    };
+    recruitmentApplicationStatus = "HIRED";
+    recruitmentHiredEmployee = EMPLOYEE_ID;
+    return json(response, 200, { employee_id: EMPLOYEE_ID });
+  }
+  if (path?.startsWith("/api/v1/recruitment/manpower-requisitions/?"))
+    return json(
+      response,
+      200,
+      peoplePage(
+        selectedPeopleCompany
+          ? [
+              {
+                id: "a1000000-0000-4000-8000-000000000001",
+                company: COMPANY_A.id,
+                branch: null,
+                department: null,
+                designation: "a1000000-0000-4000-8000-000000000010",
+                employee_type: "OFFICE_STAFF",
+                employment_type: "PERMANENT",
+                requested_headcount: 1,
+                approved_headcount: null,
+                required_by_date: "2026-11-15",
+                reason: "Customer success specialist",
+                status: "DRAFT",
+                created_at: "2026-10-21T08:00:00Z",
+              },
+            ]
+          : [],
+      ),
+    );
+  if (path?.startsWith("/api/v1/recruitment/candidates/?"))
+    return json(
+      response,
+      200,
+      peoplePage(
+        selectedPeopleCompany
+          ? [
+              {
+                id: "a2000000-0000-4000-8000-000000000001",
+                candidate_number: "CAND-E2E-001",
+                first_name: "Sara",
+                middle_name: "",
+                last_name: "Ahmed",
+                mobile_number: "03001112222",
+                email: "sara@example.test",
+                city: "Karachi",
+                source_type: "WEBSITE",
+                status: "ACTIVE",
+                notes: "",
+              },
+            ]
+          : [],
+      ),
+    );
+  if (path?.startsWith("/api/v1/recruitment/applications/?"))
+    return json(
+      response,
+      200,
+      peoplePage(selectedPeopleCompany ? [recruitmentApplicationBody()] : []),
+    );
+  if (path?.startsWith("/api/v1/recruitment/vacancies/?"))
+    return json(
+      response,
+      200,
+      peoplePage(
+        selectedPeopleCompany
+          ? [
+              {
+                id: "a4000000-0000-4000-8000-000000000001",
+                vacancy_code: "VAC-E2E-001",
+                title: "Customer success specialist",
+                status: "OPEN",
+                number_of_positions: 1,
+                positions_filled: 0,
+                opening_date: "2026-10-20",
+              },
+            ]
+          : [],
+      ),
+    );
+  if (path === "/api/v1/leave/me/requests/" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    submittedLeaveRequest = {
+      id: "b2000000-0000-4000-8000-000000000009",
+      request_number: "LR-E2E-NEW",
+      employee: EMPLOYEE_ID,
+      employee_name: "Sara Ahmed",
+      leave_type: body.leave_type,
+      leave_type_name: "Annual Leave",
+      starts_at: body.starts_at,
+      ends_at: body.ends_at,
+      requested_units: "1.00",
+      approved_units: null,
+      reason: body.reason,
+      status: "DRAFT",
+      emergency_request: Boolean(body.emergency_request),
+    };
+    return json(response, 201, submittedLeaveRequest);
+  }
+  if (
+    path ===
+      "/api/v1/leave/me/requests/b2000000-0000-4000-8000-000000000009/submit/" &&
+    request.method === "POST"
+  ) {
+    submittedLeaveRequest.status = "SUBMITTED";
+    return json(response, 200, submittedLeaveRequest);
+  }
+  if (
+    path ===
+      "/api/v1/leave/manager/requests/b2000000-0000-4000-8000-000000000009/approve/" &&
+    request.method === "POST"
+  ) {
+    submittedLeaveRequest.status = "APPROVED";
+    submittedLeaveRequest.approved_units =
+      submittedLeaveRequest.requested_units;
+    return json(response, 200, submittedLeaveRequest);
+  }
+  if (path?.startsWith("/api/v1/leave/types/") && request.method === "GET")
+    return json(
+      response,
+      200,
+      peoplePage([
+        {
+          id: LEAVE_TYPE_ID,
+          code: "ANNUAL",
+          name: "Annual Leave",
+          unit: "DAYS",
+          requires_balance: true,
+          requires_attachment: false,
+          allow_partial_day: false,
+        },
+      ]),
+    );
+  if (
+    path?.startsWith("/api/v1/leave/me/requests/") &&
+    request.method === "GET"
+  )
+    return json(
+      response,
+      200,
+      peoplePage([
+        ...(submittedLeaveRequest ? [submittedLeaveRequest] : []),
+        {
+          id: "b2000000-0000-4000-8000-000000000001",
+          request_number: "LR-E2E-001",
+          employee: EMPLOYEE_ID,
+          leave_type: LEAVE_TYPE_ID,
+          starts_at: "2026-11-10T09:00:00Z",
+          ends_at: "2026-11-11T09:00:00Z",
+          requested_units: "1.00",
+          approved_units: null,
+          reason: "Personal appointment",
+          status: "SUBMITTED",
+          emergency_request: false,
+        },
+      ]),
+    );
+  if (
+    path?.startsWith("/api/v1/leave/me/balances/") &&
+    request.method === "GET"
+  )
+    return json(response, 200, [
+      {
+        leave_type: LEAVE_TYPE_ID,
+        leave_type_name: "Annual Leave",
+        unit: "DAYS",
+        entitled: "20.00",
+        reserved: "1.00",
+        taken: "4.00",
+        available: "15.00",
+      },
+    ]);
+  if (
+    path?.startsWith("/api/v1/leave/manager/requests/") &&
+    request.method === "GET"
+  )
+    return json(
+      response,
+      200,
+      peoplePage([
+        ...(submittedLeaveRequest?.status === "SUBMITTED"
+          ? [submittedLeaveRequest]
+          : []),
+        {
+          id: "b3000000-0000-4000-8000-000000000001",
+          request_number: "LR-E2E-002",
+          employee: EMPLOYEE_ID,
+          employee_name: "Amina Khan",
+          leave_type: LEAVE_TYPE_ID,
+          leave_type_name: "Annual Leave",
+          starts_at: "2026-11-14T09:00:00Z",
+          ends_at: "2026-11-15T09:00:00Z",
+          requested_units: "1.00",
+          approved_units: null,
+          status: "SUBMITTED",
+          emergency_request: false,
+        },
+      ]),
+    );
+  if (
+    path?.startsWith("/api/v1/leave/team/calendar/") &&
+    request.method === "GET"
+  )
+    return json(response, 200, peoplePage([]));
+  if (path?.startsWith("/api/v1/leave/holidays/") && request.method === "GET")
+    return json(
+      response,
+      200,
+      peoplePage([
+        {
+          id: "b4000000-0000-4000-8000-000000000001",
+          date: "2026-12-25",
+          name: "Company holiday",
+          holiday_type: "PUBLIC",
+          is_full_day: true,
+          calendar_name: "Company calendar",
+        },
+      ]),
+    );
+  if (path?.startsWith("/api/v1/training/courses/?"))
+    return json(
+      response,
+      200,
+      peoplePage(
+        selectedPeopleCompany
+          ? [
+              {
+                id: "c1000000-0000-4000-8000-000000000001",
+                company: COMPANY_A.id,
+                category: null,
+                code: "COMM-101",
+                title: "Business communication",
+                description: "Communication fundamentals",
+                objective: "Improve business communication",
+                delivery_method: "CLASSROOM",
+                duration_hours: "2.00",
+                status: "ACTIVE",
+                requires_assessment: false,
+                produces_certificate: true,
+              },
+            ]
+          : [],
+      ),
+    );
+  if (
+    path === `/api/v1/training/sessions/${LEARNING_SESSION_ID}/` &&
+    request.method === "GET"
+  )
+    return selectedPeopleCompany
+      ? json(response, 200, learningSessionBody())
+      : json(response, 404, { detail: "Not found." });
+  for (const [action, target] of [
+    ["open-enrollment", "OPEN_FOR_ENROLLMENT"],
+    ["start", "IN_PROGRESS"],
+    ["complete", "COMPLETED"],
+  ]) {
+    if (
+      path === `/api/v1/training/sessions/${LEARNING_SESSION_ID}/${action}/` &&
+      request.method === "POST"
+    ) {
+      learningSessionStatus = target;
+      return json(response, 200, learningSessionBody());
+    }
+  }
+  if (
+    path === `/api/v1/training/sessions/${LEARNING_SESSION_ID}/enroll/` &&
+    request.method === "POST"
+  ) {
+    const body = await readJsonBody(request);
+    const enrollment = {
+      id: "c6000000-0000-4000-8000-000000000001",
+      session: LEARNING_SESSION_ID,
+      employee: body.employee,
+      status: "ENROLLED",
+    };
+    return json(response, 201, enrollment);
+  }
+  if (path?.startsWith("/api/v1/training/sessions/?"))
+    return json(
+      response,
+      200,
+      peoplePage(selectedPeopleCompany ? [learningSessionBody()] : []),
+    );
+  if (path?.startsWith("/api/v1/training/qualification-types/?"))
+    return json(
+      response,
+      200,
+      peoplePage([
+        {
+          id: "c5000000-0000-4000-8000-000000000001",
+          code: "BUSINESS-COMMUNICATION",
+          name: "Business communication certificate",
+          is_active: true,
+        },
+      ]),
+    );
+  if (path?.startsWith("/api/v1/training/employee-qualifications/?"))
+    return json(
+      response,
+      200,
+      peoplePage(
+        selectedPeopleCompany
+          ? [
+              {
+                id: "c4000000-0000-4000-8000-000000000001",
+                employee: EMPLOYEE_ID,
+                qualification_type: "c5000000-0000-4000-8000-000000000001",
+                source: "TRAINING",
+                obtained_on: "2026-10-01",
+                expires_on: null,
+                status: "VALID",
+                notes: "",
+              },
+            ]
+          : [],
+      ),
+    );
   if (path === "/api/v1/platform/modules/") {
     return json(response, 200, PLATFORM_MODULES);
   }
